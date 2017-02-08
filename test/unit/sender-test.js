@@ -24,6 +24,10 @@ class SocketStub extends EventEmitter {
     this.validationData.port = port;
     this.validationData.ipAddress = ipAddress;
 
+    process.nextTick(this.responseHandler.bind(this));
+  }
+
+  responseHandler() {
     if (this.sendSuccess) {
       this.emit('message', this);
     } else {
@@ -37,7 +41,6 @@ class SocketStub extends EventEmitter {
 }
 
 const senderIpAddressImpl = function(test, sinon, ipAddress, udpVersionExpected, sendSuccess) {
-  // TODO: Try using constructor directly instead.
   const myCreateSocket = function(udpVersion) {
     return new SocketStub(udpVersion, sendSuccess);
   };
@@ -90,5 +93,22 @@ exports['Sender IP Address'] = {
 
   'send fails': function(test) {
     senderIpAddressImpl(test, this.sinon, anyIpv4, 'udp4', false);
+  },
+
+  'send cancel': function(test) {
+    const myCreateSocket = function(udpVersion) {
+      return new SocketStub(udpVersion, true);
+    };
+
+    this.sinon.stub(Dgram, 'createSocket', myCreateSocket);
+    const multiSubnetFailover = false;
+    const sender = new Sender(anyIpv4, anyPort, anyRequest, multiSubnetFailover);
+    sender.execute((error, message) => {
+      test.ok(false, 'Should never get here.', error, message);
+    });
+
+    sender.cancel();
+
+    test.done();
   }
 };
