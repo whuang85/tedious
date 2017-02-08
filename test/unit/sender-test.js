@@ -9,13 +9,14 @@ const anyPort = 1234;
 const anyIpv4 = '1.2.3.4';
 const anyIpv6 = '2002:20:0:0:0:0:1:3';
 const anyRequest = new Buffer(0x02);
+const udpIpv4 = 'udp4';
+const udpIpv6 = 'udp6';
 
 class SocketStub extends EventEmitter {
-  constructor(udpVersion, sendSuccess) {
+  constructor(sendSuccess) {
     super();
     this.sendSuccess = sendSuccess;
     this.validationData = {};
-    this.validationData.udpVersion = udpVersion;
   }
 
   send(buffer, offset, length, port, ipAddress) {
@@ -40,12 +41,8 @@ class SocketStub extends EventEmitter {
   }
 }
 
-const senderIpAddressImpl = function(test, sinon, ipAddress, udpVersionExpected, sendSuccess) {
-  const myCreateSocket = function(udpVersion) {
-    return new SocketStub(udpVersion, sendSuccess);
-  };
-
-  sinon.stub(Dgram, 'createSocket', myCreateSocket);
+const sendToIpAddressImpl = function(test, sinon, ipAddress, udpVersionExpected, sendSuccess) {
+  sinon.stub(Dgram, 'createSocket').withArgs(udpVersionExpected).returns(new SocketStub(sendSuccess));
 
   const multiSubnetFailover = false;
   const sender = new Sender(ipAddress, anyPort, anyRequest, multiSubnetFailover);
@@ -61,7 +58,6 @@ const senderIpAddressImpl = function(test, sinon, ipAddress, udpVersionExpected,
       socketStub = error;
     }
 
-    test.strictEqual(socketStub.validationData.udpVersion, udpVersionExpected);
     test.strictEqual(socketStub.validationData.buffer, anyRequest);
     test.strictEqual(socketStub.validationData.offset, 0);
     test.strictEqual(socketStub.validationData.port, anyPort);
@@ -72,7 +68,7 @@ const senderIpAddressImpl = function(test, sinon, ipAddress, udpVersionExpected,
   });
 };
 
-exports['Sender IP Address'] = {
+exports['Sender send to IP address'] = {
   setUp: function(done) {
     this.sinon = Sinon.sandbox.create();
     done();
@@ -83,24 +79,20 @@ exports['Sender IP Address'] = {
     done();
   },
 
-  'connects directly if given an IP v4 address': function(test) {
-    senderIpAddressImpl(test, this.sinon, anyIpv4, 'udp4', true);
+  'send to IPv4': function(test) {
+    sendToIpAddressImpl(test, this.sinon, anyIpv4, udpIpv4, true);
   },
 
-  'connects directly if given an IP v6 address': function(test) {
-    senderIpAddressImpl(test, this.sinon, anyIpv6, 'udp6', true);
+  'send to IPv6': function(test) {
+    sendToIpAddressImpl(test, this.sinon, anyIpv6, udpIpv6, true);
   },
 
   'send fails': function(test) {
-    senderIpAddressImpl(test, this.sinon, anyIpv4, 'udp4', false);
+    sendToIpAddressImpl(test, this.sinon, anyIpv4, udpIpv4, false);
   },
 
   'send cancel': function(test) {
-    const myCreateSocket = function(udpVersion) {
-      return new SocketStub(udpVersion, true);
-    };
-
-    this.sinon.stub(Dgram, 'createSocket', myCreateSocket);
+    this.sinon.stub(Dgram, 'createSocket').withArgs(udpIpv4).returns(new SocketStub(true));
     const multiSubnetFailover = false;
     const sender = new Sender(anyIpv4, anyPort, anyRequest, multiSubnetFailover);
     sender.execute((error, message) => {
