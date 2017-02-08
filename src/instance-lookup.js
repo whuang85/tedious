@@ -1,7 +1,6 @@
 'use strict';
 
-const dgram = require('dgram');
-const lookupAll = require('dns-lookup-all');
+const Sender = require('./sender').Sender;
 
 const SQL_SERVER_BROWSER_PORT = 1434;
 const TIMEOUT = 2 * 1000;
@@ -37,58 +36,34 @@ function instanceLookup(options, callback) {
   }
 
   const multiSubnetFailover = options.multiSubnetFailover !== undefined && options.multiSubnetFailover;
-  let socket, timer, retriesLeft = retries;
-
-  function onMessage(message) {
-    clearTimeout(timer);
-    socket.close();
-
-    message = message.toString('ascii', MYSTERY_HEADER_LENGTH);
-    const port = parseBrowserResponse(message, instanceName);
-
-    if (port) {
-      return callback(undefined, port);
-    } else {
-      return callback('Port for ' + instanceName + ' not found in ' + message);
-    }
-  }
-
-  function onError(err) {
-    clearTimeout(timer);
-    socket.close();
-
-    return callback('Failed to lookup instance on ' + server + ' - ' + err.message);
-  }
+  let sender, timer, retriesLeft = retries;
 
   function onTimeout() {
-    socket.close();
-
+    sender.cancel();
     return makeAttempt();
   }
 
   function makeAttempt() {
     if (retriesLeft > 0) {
       retriesLeft--;
+
       const request = new Buffer([0x02]);
-      socket = dgram.createSocket('udp4');
-      socket.on('error', onError);
-      socket.on('message', onMessage);
+      sender = new Sender(options.server, SQL_SERVER_BROWSER_PORT, request, multiSubnetFailover);
+      sender.execute((err, message) => {
+        clearTimeout(timer);
+        if (err) {
+          return callback('Failed to lookup instance on ' + server + ' - ' + err.message);
+        } else {
+          message = message.toString('ascii', MYSTERY_HEADER_LENGTH);
+          const port = parseBrowserResponse(message, instanceName);
 
-      if (multiSubnetFailover) {
-        // TODO: Support both IPv4 and IPv6 here.
-        lookupAll(server, 4, (err, addresses) => {
-          if (err) {
-            return callback(err.message);
+          if (port) {
+            return callback(undefined, port);
+          } else {
+            return callback('Port for ' + instanceName + ' not found in ' + message);
           }
-
-          const len = addresses.length;
-          for (let i = 0; i < len; i++) {
-            socket.send(request, 0, request.length, SQL_SERVER_BROWSER_PORT, addresses[i].address);
-          }
-        });
-      } else {
-        socket.send(request, 0, request.length, SQL_SERVER_BROWSER_PORT, server);
-      }
+        }
+      });
 
       return timer = setTimeout(onTimeout, timeout);
     } else {
