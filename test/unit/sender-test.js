@@ -19,7 +19,9 @@ const sendResultSuccess = 0;
 const sendResultError = 1;
 const sendResultCancel = 2;
 
+// Implementation for testing all variations of sending a message to IP address.
 const sendToIpAddressImpl = function(test, sinon, ipAddress, udpVersionExpected, sendResult) {
+  // Stub function to mimic socket emitting 'error' and 'message' events.
   const emitEvent = function() {
     if (sendResult === sendResultError) {
       this.emit('error', this);
@@ -28,15 +30,21 @@ const sendToIpAddressImpl = function(test, sinon, ipAddress, udpVersionExpected,
     }
   };
 
+  // Stub function to mimic socket 'send' without causing network activity.
   const sendStub = function(buffer, offset, length, port, ipAddress) {
     process.nextTick(emitEvent.bind(this));
   };
 
+  // Create socket exactly like the Sender class would create while stubbing
+  // some methods for unit testing.
   const testSocket = Dgram.createSocket(udpVersionExpected);
   const socketSendStub = sinon.stub(testSocket, 'send', sendStub);
   const socketCloseStub = sinon.stub(testSocket, 'close');
-  const socketStub = sinon.stub(Dgram, 'createSocket');
-  socketStub.withArgs(udpVersionExpected).returns(testSocket);
+
+  // Stub createSocket method to returns a socket created exactly like the
+  // method would but with a few methods stubbed out above.
+  const createSocketStub = sinon.stub(Dgram, 'createSocket');
+  createSocketStub.withArgs(udpVersionExpected).returns(testSocket);
 
   const multiSubnetFailover = false;
   const sender = new Sender(ipAddress, anyPort, anyRequest, multiSubnetFailover);
@@ -49,6 +57,7 @@ const sendToIpAddressImpl = function(test, sinon, ipAddress, udpVersionExpected,
       test.strictEqual(error, testSocket);
       test.strictEqual(message, undefined);
     } else {
+      test.strictEqual(sendResult, sendResultCancel);
       test.ok(false, 'Should never get here.');
     }
 
@@ -56,7 +65,7 @@ const sendToIpAddressImpl = function(test, sinon, ipAddress, udpVersionExpected,
     test.done();
   });
 
-  test.ok(socketStub.calledOnce);
+  test.ok(createSocketStub.calledOnce);
   test.ok(socketSendStub.withArgs(anyRequest, 0, anyRequest.length, anyPort, ipAddress).calledOnce);
 
   if (sendResult === sendResultCancel) {
@@ -94,13 +103,19 @@ exports['Sender send to IP address'] = {
   }
 };
 
-const sendToHostAddressImpl = function(test, sinon, multiSubnetFailover, sendResult) {
+// Implementation for testing all variations of sending a message to hostname.
+const sendToHostAddressImpl = function(test, sinon, multiSubnetFailover, sendResult, lookupError) {
+  // Set of IP addresses to be returned by stubbed out lookupAll method.
   const addresses = [
     { address: '127.0.0.2' },
     { address: '2002:20:0:0:0:0:1:3' },
     { address: '127.0.0.4' }
   ];
 
+  // Since we're testing Sender class, we just want to verify that the 'send' method
+  // on the right strategy class is being invoked. So we create the strategy class and
+  // stub out the send method. In depth testing of the strategy classes will be done
+  // in the unit tests for the respective classes.
   let testStrategy;
   if (multiSubnetFailover) {
     testStrategy = new ParallelSendStrategy(addresses, anyPort, anyRequest);
@@ -108,15 +123,20 @@ const sendToHostAddressImpl = function(test, sinon, multiSubnetFailover, sendRes
     testStrategy = new SequentialSendStrategy(addresses, anyPort, anyRequest);
   }
 
+  // Stub send method on the strategy class.
   const callback = () => { };
   const strategySendStub = sinon.stub(testStrategy, 'send');
   strategySendStub.withArgs(callback);
 
   const sender = new Sender(anyHost, anyPort, anyRequest, multiSubnetFailover);
 
+  // Stub out the lookupAll method to prevent network activity from doing a DNS
+  // lookup. Succeeds or fails depending on lookupError.
   const lookupAllStub = sinon.stub(sender, 'invokeLookupAll');
-  lookupAllStub.callsArgWith(1, null, addresses);
+  lookupAllStub.callsArgWith(1, lookupError, addresses);
 
+  // Stub the appropriate create strategy method for the test to returns a strategy
+  // object created exactly like the method would but with a few methods stubbed.
   let createStrategyStub;
   if (multiSubnetFailover) {
     createStrategyStub = sinon.stub(sender, 'createParallelSendStrategy');
@@ -131,12 +151,26 @@ const sendToHostAddressImpl = function(test, sinon, multiSubnetFailover, sendRes
   if (sendResult === sendResultCancel) {
     const strategyCancelStub = sinon.stub(testStrategy, 'cancel');
     sender.cancel();
-    test.ok(strategyCancelStub.calledOnce);
+
+    if (lookupError) {
+      // When there is lookupError, the strategy object does not get created.
+      // So there will not be a cancel call on the strategy object.
+      test.strictEqual(strategyCancelStub.callCount, 0);
+    } else {
+      test.ok(strategyCancelStub.calledOnce);
+    }
   }
 
   test.ok(lookupAllStub.calledOnce);
-  test.ok(createStrategyStub.calledOnce);
-  test.ok(strategySendStub.calledOnce);
+
+  if (lookupError) {
+    // No strategy object creation and hence no send on lookupError.
+    test.strictEqual(createStrategyStub.callCount, 0);
+    test.strictEqual(strategySendStub.callCount, 0);
+  } else {
+    test.ok(createStrategyStub.calledOnce);
+    test.ok(strategySendStub.calledOnce);
+  }
 
   test.done();
 };
@@ -154,21 +188,31 @@ exports['Sender send to hostname'] = {
 
   'send with MultiSubnetFailover': function(test) {
     const multiSubnetFailover = true;
-    sendToHostAddressImpl(test, this.sinon, multiSubnetFailover, sendResultSuccess);
+    const lookupError = null;
+    sendToHostAddressImpl(test, this.sinon, multiSubnetFailover, sendResultSuccess, lookupError);
   },
 
   'send with MultiSubnetFailover cancel': function(test) {
     const multiSubnetFailover = true;
-    sendToHostAddressImpl(test, this.sinon, multiSubnetFailover, sendResultCancel);
+    const lookupError = null;
+    sendToHostAddressImpl(test, this.sinon, multiSubnetFailover, sendResultCancel, lookupError);
   },
 
   'send without MultiSubnetFailover': function(test) {
     const multiSubnetFailover = false;
-    sendToHostAddressImpl(test, this.sinon, multiSubnetFailover, sendResultSuccess);
+    const lookupError = null;
+    sendToHostAddressImpl(test, this.sinon, multiSubnetFailover, sendResultSuccess, lookupError);
   },
 
   'send without MultiSubnetFailover cancel': function(test) {
     const multiSubnetFailover = false;
-    sendToHostAddressImpl(test, this.sinon, multiSubnetFailover, sendResultCancel);
+    const lookupError = null;
+    sendToHostAddressImpl(test, this.sinon, multiSubnetFailover, sendResultCancel, lookupError);
+  },
+
+  'send lookup error': function(test) {
+    const multiSubnetFailover = false;
+    const lookupError = new Error('some error');
+    sendToHostAddressImpl(test, this.sinon, multiSubnetFailover, sendResultCancel, lookupError);
   }
 };
