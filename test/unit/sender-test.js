@@ -1,7 +1,6 @@
 'use strict';
 
 const Dgram = require('dgram');
-const EventEmitter = require('events').EventEmitter;
 const Sender = require('../../src/sender').Sender;
 const Sinon = require('sinon');
 
@@ -17,57 +16,47 @@ const sendResultSuccess = 0;
 const sendResultError = 1;
 const sendResultCancel = 2;
 
-class FakeSocket extends EventEmitter {
-  constructor(result) {
-    super();
-    this.result = result;
-  }
-
-  send(buffer, offset, length, port, ipAddress) {
-    process.nextTick(this.responseHandler.bind(this));
-  }
-
-  responseHandler() {
-    if (this.result === sendResultError) {
+const sendToIpAddressImpl = function(test, sinon, ipAddress, udpVersionExpected, sendResult) {
+  const emitEvent = function() {
+    if (sendResult === sendResultError) {
       this.emit('error', this);
     } else {
       this.emit('message', this);
     }
-  }
+  };
 
-  close() {
-  }
-}
+  const sendStub = function(buffer, offset, length, port, ipAddress) {
+    process.nextTick(emitEvent.bind(this));
+  };
 
-const sendToIpAddressImpl = function(test, sinon, ipAddress, udpVersionExpected, result) {
-  const fakeSocket = new FakeSocket(result);
-  const socketSendSpy = sinon.spy(fakeSocket, 'send');
-  const socketCloseSpy = sinon.spy(fakeSocket, 'close');
-  sinon.stub(Dgram, 'createSocket').withArgs(udpVersionExpected).returns(fakeSocket);
+  const testSocket = Dgram.createSocket(udpVersionExpected);
+  const socketSendStub = sinon.stub(testSocket, 'send', sendStub);
+  const socketCloseStub = sinon.stub(testSocket, 'close');
+  sinon.stub(Dgram, 'createSocket').withArgs(udpVersionExpected).returns(testSocket);
 
   const multiSubnetFailover = false;
   const sender = new Sender(ipAddress, anyPort, anyRequest, multiSubnetFailover);
 
   sender.execute((error, message) => {
-    if (result === sendResultSuccess) {
+    if (sendResult === sendResultSuccess) {
       test.strictEqual(error, null);
-      test.strictEqual(message, fakeSocket);
-    } else if (result === sendResultError) {
-      test.strictEqual(error, fakeSocket);
+      test.strictEqual(message, testSocket);
+    } else if (sendResult === sendResultError) {
+      test.strictEqual(error, testSocket);
       test.strictEqual(message, undefined);
     } else {
       test.ok(false, 'Should never get here.', error, message);
     }
 
-    test.ok(socketCloseSpy.withArgs().calledOnce);
+    test.ok(socketCloseStub.withArgs().calledOnce);
     test.done();
   });
 
-  test.ok(socketSendSpy.withArgs(anyRequest, 0, anyRequest.length, anyPort, ipAddress).calledOnce);
+  test.ok(socketSendStub.withArgs(anyRequest, 0, anyRequest.length, anyPort, ipAddress).calledOnce);
 
-  if (result === sendResultCancel) {
+  if (sendResult === sendResultCancel) {
     sender.cancel();
-    test.ok(socketCloseSpy.withArgs().calledOnce);
+    test.ok(socketCloseStub.withArgs().calledOnce);
     test.done();
   }
 };
