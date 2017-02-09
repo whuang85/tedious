@@ -90,10 +90,12 @@ class Sender {
 
       if (this.multiSubnetFailover) {
         this.parallelSendStrategy =
-          this.createParallelSendStrategy(addresses, this.port, this.request).send(cb);
+          this.createParallelSendStrategy(addresses, this.port, this.request);
+        this.parallelSendStrategy.send(cb);
       } else {
         this.sequentialSendStrategy =
-          this.createSequentialSendStrategy(addresses, this.port, this.request).send(cb);
+          this.createSequentialSendStrategy(addresses, this.port, this.request);
+        this.sequentialSendStrategy.send(cb);
       }
     });
   }

@@ -3,6 +3,7 @@
 const Dgram = require('dgram');
 const Sender = require('../../src/sender').Sender;
 const ParallelSendStrategy = require('../../src/sender').ParallelSendStrategy;
+const SequentialSendStrategy = require('../../src/sender').SequentialSendStrategy;
 const Sinon = require('sinon');
 
 const anyPort = 1234;
@@ -48,7 +49,7 @@ const sendToIpAddressImpl = function(test, sinon, ipAddress, udpVersionExpected,
       test.strictEqual(error, testSocket);
       test.strictEqual(message, undefined);
     } else {
-      test.ok(false, 'Should never get here.', error, message);
+      test.ok(false, 'Should never get here.');
     }
 
     test.ok(socketCloseStub.withArgs().calledOnce);
@@ -93,6 +94,53 @@ exports['Sender send to IP address'] = {
   }
 };
 
+const sendToHostAddressImpl = function(test, sinon, multiSubnetFailover, sendResult) {
+  const addresses = [
+    { address: '127.0.0.2' },
+    { address: '2002:20:0:0:0:0:1:3' },
+    { address: '127.0.0.4' }
+  ];
+
+  let testStrategy;
+  if (multiSubnetFailover) {
+    testStrategy = new ParallelSendStrategy(addresses, anyPort, anyRequest);
+  } else {
+    testStrategy = new SequentialSendStrategy(addresses, anyPort, anyRequest);
+  }
+
+  const callback = () => { };
+  const strategySendStub = sinon.stub(testStrategy, 'send');
+  strategySendStub.withArgs(callback);
+
+  const sender = new Sender(anyHost, anyPort, anyRequest, multiSubnetFailover);
+
+  const lookupAllStub = sinon.stub(sender, 'invokeLookupAll');
+  lookupAllStub.callsArgWith(1, null, addresses);
+
+  let createStrategyStub;
+  if (multiSubnetFailover) {
+    createStrategyStub = sinon.stub(sender, 'createParallelSendStrategy');
+  } else {
+    createStrategyStub = sinon.stub(sender, 'createSequentialSendStrategy');
+  }
+
+  createStrategyStub.withArgs(addresses, anyPort, anyRequest).returns(testStrategy);
+
+  sender.execute(callback);
+
+  if (sendResult === sendResultCancel) {
+    const strategyCancelStub = sinon.stub(testStrategy, 'cancel');
+    sender.cancel();
+    test.ok(strategyCancelStub.calledOnce);
+  }
+
+  test.ok(lookupAllStub.calledOnce);
+  test.ok(createStrategyStub.calledOnce);
+  test.ok(strategySendStub.calledOnce);
+
+  test.done();
+};
+
 exports['Sender send to hostname'] = {
   setUp: function(done) {
     this.sinon = Sinon.sandbox.create();
@@ -105,28 +153,22 @@ exports['Sender send to hostname'] = {
   },
 
   'send with MultiSubnetFailover': function(test) {
-    const addresses = [
-      { address: '127.0.0.2' },
-      { address: '2002:20:0:0:0:0:1:3' },
-      { address: '127.0.0.4' }
-    ];
-
-    const testParallelSendStrategy = new ParallelSendStrategy(addresses, anyPort, anyRequest);
-
-    const sendStub = this.sinon.stub(testParallelSendStrategy, 'send');
-    sendStub.callsArgWith(0);
-
     const multiSubnetFailover = true;
-    const sender = new Sender(anyHost, anyPort, anyRequest, multiSubnetFailover);
+    sendToHostAddressImpl(test, this.sinon, multiSubnetFailover, sendResultSuccess);
+  },
 
-    this.sinon.stub(sender, 'invokeLookupAll').callsArgWith(1, null, addresses);
-    const parallelStrategyStub = this.sinon.stub(sender, 'createParallelSendStrategy');
-    parallelStrategyStub.withArgs(addresses, anyPort, anyRequest).returns(testParallelSendStrategy);
+  'send with MultiSubnetFailover cancel': function(test) {
+    const multiSubnetFailover = true;
+    sendToHostAddressImpl(test, this.sinon, multiSubnetFailover, sendResultCancel);
+  },
 
-    sender.execute(() => {
-      test.ok(parallelStrategyStub.calledOnce);
-      test.ok(sendStub.calledOnce);
-      test.done();
-    });
+  'send without MultiSubnetFailover': function(test) {
+    const multiSubnetFailover = false;
+    sendToHostAddressImpl(test, this.sinon, multiSubnetFailover, sendResultSuccess);
+  },
+
+  'send without MultiSubnetFailover cancel': function(test) {
+    const multiSubnetFailover = false;
+    sendToHostAddressImpl(test, this.sinon, multiSubnetFailover, sendResultCancel);
   }
 };
