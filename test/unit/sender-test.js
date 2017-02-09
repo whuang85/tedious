@@ -32,7 +32,8 @@ const sendToIpAddressImpl = function(test, sinon, ipAddress, udpVersionExpected,
   const testSocket = Dgram.createSocket(udpVersionExpected);
   const socketSendStub = sinon.stub(testSocket, 'send', sendStub);
   const socketCloseStub = sinon.stub(testSocket, 'close');
-  sinon.stub(Dgram, 'createSocket').withArgs(udpVersionExpected).returns(testSocket);
+  const socketStub = sinon.stub(Dgram, 'createSocket');
+  socketStub.withArgs(udpVersionExpected).returns(testSocket);
 
   const multiSubnetFailover = false;
   const sender = new Sender(ipAddress, anyPort, anyRequest, multiSubnetFailover);
@@ -52,6 +53,7 @@ const sendToIpAddressImpl = function(test, sinon, ipAddress, udpVersionExpected,
     test.done();
   });
 
+  test.ok(socketStub.calledOnce);
   test.ok(socketSendStub.withArgs(anyRequest, 0, anyRequest.length, anyPort, ipAddress).calledOnce);
 
   if (sendResult === sendResultCancel) {
