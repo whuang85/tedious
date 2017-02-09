@@ -67,18 +67,33 @@ class Sender {
     this.onMessage = onMessage;
   }
 
+  // Wrapper for stubbing. Sinon does not have support for stubbing module functions.
+  invokeLookupAll(host, cb) {
+    lookupAll(host, cb);
+  }
+
+  // Wrappers for stubbing creation of Strategy objects. Sinon support for constructors
+  // seems limited.
+  createParallelSendStrategy(addresses, port, request) {
+    return new ParallelSendStrategy(addresses, port, request);
+  }
+
+  createSequentialSendStrategy(addresses, port, request) {
+    return new SequentialSendStrategy(addresses, port, request);
+  }
+
   executeForHostname(cb) {
-    lookupAll(this.host, (err, addresses) => {
+    this.invokeLookupAll(this.host, (err, addresses) => {
       if (err) {
         return cb(err);
       }
 
       if (this.multiSubnetFailover) {
         this.parallelSendStrategy =
-          new ParallelSendStrategy(addresses, this.port, this.request).send(cb);
+          this.createParallelSendStrategy(addresses, this.port, this.request).send(cb);
       } else {
         this.sequentialSendStrategy =
-          new SequentialSendStrategy(addresses, this.port, this.request).send(cb);
+          this.createSequentialSendStrategy(addresses, this.port, this.request).send(cb);
       }
     });
   }

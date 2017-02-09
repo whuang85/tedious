@@ -2,11 +2,13 @@
 
 const Dgram = require('dgram');
 const Sender = require('../../src/sender').Sender;
+const ParallelSendStrategy = require('../../src/sender').ParallelSendStrategy;
 const Sinon = require('sinon');
 
 const anyPort = 1234;
 const anyIpv4 = '1.2.3.4';
 const anyIpv6 = '2002:20:0:0:0:0:1:3';
+const anyHost = 'myhostname';
 const anyRequest = new Buffer(0x02);
 
 const udpIpv4 = 'udp4';
@@ -88,5 +90,43 @@ exports['Sender send to IP address'] = {
 
   'send cancel': function(test) {
     sendToIpAddressImpl(test, this.sinon, anyIpv4, udpIpv4, sendResultCancel);
+  }
+};
+
+exports['Sender send to hostname'] = {
+  setUp: function(done) {
+    this.sinon = Sinon.sandbox.create();
+    done();
+  },
+
+  tearDown: function(done) {
+    this.sinon.restore();
+    done();
+  },
+
+  'send with MultiSubnetFailover': function(test) {
+    const addresses = [
+      { address: '127.0.0.2' },
+      { address: '2002:20:0:0:0:0:1:3' },
+      { address: '127.0.0.4' }
+    ];
+
+    const testParallelSendStrategy = new ParallelSendStrategy(addresses, anyPort, anyRequest);
+
+    const sendStub = this.sinon.stub(testParallelSendStrategy, 'send');
+    sendStub.callsArgWith(0);
+
+    const multiSubnetFailover = true;
+    const sender = new Sender(anyHost, anyPort, anyRequest, multiSubnetFailover);
+
+    this.sinon.stub(sender, 'invokeLookupAll').callsArgWith(1, null, addresses);
+    const parallelStrategyStub = this.sinon.stub(sender, 'createParallelSendStrategy');
+    parallelStrategyStub.withArgs(addresses, anyPort, anyRequest).returns(testParallelSendStrategy);
+
+    sender.execute(() => {
+      test.ok(parallelStrategyStub.calledOnce);
+      test.ok(sendStub.calledOnce);
+      test.done();
+    });
   }
 };
