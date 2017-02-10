@@ -181,17 +181,17 @@ class SequentialSendStrategy {
     this.socket = null;
     this.onError = null;
     this.onMessage = null;
+    this.next = 0;
   }
 
   send(cb) {
     const that = this;
-    const next = this.addresses.shift();
 
     const onError = function(err) {
       clearSocket(this, onError, onMessage);
       that.socket = null;
 
-      if (that.addresses.length) {
+      if (that.addresses.length > that.next) {
         that.send(cb);
       } else {
         cb(err);
@@ -204,7 +204,9 @@ class SequentialSendStrategy {
       cb(null, message);
     };
 
-    this.socket = sendDgramSocketRequest(next.address, this.port, this.request, onError, onMessage);
+    this.socket = sendDgramSocketRequest(
+      this.addresses[this.next].address, this.port, this.request, onError, onMessage);
+    this.next++;
 
     this.onError = onError;
     this.onMessage = onMessage;
