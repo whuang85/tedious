@@ -19,29 +19,32 @@ const sendResultSuccess = 0;
 const sendResultError = 1;
 const sendResultCancel = 2;
 
+// Stub function to mimic socket emitting 'error' and 'message' events.
+const emitEvent = function() {
+  if (this.sendResult === sendResultError) {
+    this.emit('error', this);
+  } else {
+    this.emit('message', this);
+  }
+};
+
+// Stub function to mimic socket 'send' without causing network activity.
+const sendStub = function(buffer, offset, length, port, ipAddress) {
+  process.nextTick(emitEvent.bind(this));
+};
+
 // Implementation for testing all variations of sending a message to IP address.
 const sendToIpAddressImpl = function(test, sinon, ipAddress, udpVersionExpected, sendResult) {
-  // Stub function to mimic socket emitting 'error' and 'message' events.
-  const emitEvent = function() {
-    if (sendResult === sendResultError) {
-      this.emit('error', this);
-    } else {
-      this.emit('message', this);
-    }
-  };
-
-  // Stub function to mimic socket 'send' without causing network activity.
-  const sendStub = function(buffer, offset, length, port, ipAddress) {
-    process.nextTick(emitEvent.bind(this));
-  };
-
   // Create socket exactly like the Sender class would create while stubbing
   // some methods for unit testing.
   const testSocket = Dgram.createSocket(udpVersionExpected);
   const socketSendStub = sinon.stub(testSocket, 'send', sendStub);
   const socketCloseStub = sinon.stub(testSocket, 'close');
 
-  // Stub createSocket method to returns a socket created exactly like the
+  // This allows the emitEvent method to emit the right event for the given test.
+  testSocket.sendResult = sendResult;
+
+  // Stub createSocket method to return a socket created exactly like the
   // method would but with a few methods stubbed out above.
   const createSocketStub = sinon.stub(Dgram, 'createSocket');
   createSocketStub.withArgs(udpVersionExpected).returns(testSocket);
@@ -214,5 +217,136 @@ exports['Sender send to hostname'] = {
     const multiSubnetFailover = false;
     const lookupError = new Error('some error');
     sendToHostAddressImpl(test, this.sinon, multiSubnetFailover, sendResultCancel, lookupError);
+  }
+};
+
+
+exports['ParallelSendStrategy'] = {
+  setUp: function(done) {
+    this.sinon = Sinon.sandbox.create();
+
+    // IP addresses returned by DNS reverse lookup and passed to ParallelSendStrategy.
+    this.testData = [
+      { address: '1.2.3.4', udpVersion: udpIpv4 },
+      { address: '2002:20:0:0:0:0:1:3', udpVersion: udpIpv6 },
+      { address: '2002:30:0:0:0:0:2:4', udpVersion: udpIpv6 },
+      { address: '5.6.7.8', udpVersion: udpIpv4 }
+    ];
+
+    // Create sockets for each of the IP addresses with send and close stubbed out to
+    // prevent network activity.
+    for (let j = 0; j < this.testData.length; j++) {
+      this.testData[j].testSocket = Dgram.createSocket(this.testData[j].udpVersion);
+      this.testData[j].socketSendStub = this.sinon.stub(this.testData[j].testSocket, 'send', sendStub);
+      this.testData[j].socketCloseStub = this.sinon.stub(this.testData[j].testSocket, 'close');
+
+      // This allows emitEvent method to fire an 'error' or 'message' event appropriately.
+      // A given test may overwrite this value for specific sockets to test different
+      // scenarios.
+      this.testData[j].testSocket.sendResult = sendResultSuccess;
+    }
+
+    // Stub createSocket method to returns a socket created exactly like the
+    // method would but with a few methods stubbed out above.
+    this.createSocketStub = this.sinon.stub(Dgram, 'createSocket');
+    this.createSocketStub.withArgs(udpIpv4).onFirstCall().returns(this.testData[0].testSocket);
+    this.createSocketStub.withArgs(udpIpv6).onFirstCall().returns(this.testData[1].testSocket);
+    this.createSocketStub.withArgs(udpIpv6).onSecondCall().returns(this.testData[2].testSocket);
+    this.createSocketStub.withArgs(udpIpv4).onSecondCall().returns(this.testData[3].testSocket);
+
+    done();
+  },
+
+  tearDown: function(done) {
+    this.sinon.restore();
+    done();
+  },
+
+  'send all IPs success.': function(test) {
+    const parallelSendStrategy = new ParallelSendStrategy(this.testData, anyPort, anyRequest);
+    parallelSendStrategy.send((error, message) => {
+      test.strictEqual(error, null);
+
+      // We should get the message only on the first socket.
+      test.strictEqual(message, this.testData[0].testSocket);
+
+      for (let j = 0; j < this.testData.length; j++) {
+        test.ok(this.testData[j].socketSendStub.calledOnce);
+        test.ok(this.testData[j].socketCloseStub.calledOnce);
+      }
+
+      test.strictEqual(this.createSocketStub.callCount, this.testData.length);
+
+      test.done();
+    });
+  },
+
+  'send one IP fail.': function(test) {
+    // Setup first socket to fail on socket send.
+    this.testData[0].testSocket.sendResult = sendResultError;
+
+    const parallelSendStrategy = new ParallelSendStrategy(this.testData, anyPort, anyRequest);
+    parallelSendStrategy.send((error, message) => {
+      // Even though the first socket fails on send, we should not get an error
+      // as the other sockets succeed.
+      test.strictEqual(error, null);
+
+      // We setup the first send to fail. So we should get the message on the
+      // second socket.
+      test.strictEqual(message, this.testData[1].testSocket);
+
+      for (let j = 0; j < this.testData.length; j++) {
+        test.ok(this.testData[j].socketSendStub.calledOnce);
+        test.ok(this.testData[j].socketCloseStub.calledOnce);
+      }
+
+      test.strictEqual(this.createSocketStub.callCount, this.testData.length);
+
+      test.done();
+    });
+  },
+
+
+  'send all IPs fail.': function(test) {
+    // Setup all sockets to fail on socket send.
+    for (let j = 0; j < this.testData.length; j++) {
+      this.testData[j].testSocket.sendResult = sendResultError;
+    }
+
+    const parallelSendStrategy = new ParallelSendStrategy(this.testData, anyPort, anyRequest);
+    parallelSendStrategy.send((error, message) => {
+      // All socket sends fail. We should get an error on the last socket fail.
+      test.strictEqual(error, this.testData[this.testData.length - 1].testSocket);
+
+      test.strictEqual(message, undefined);
+
+      for (let j = 0; j < this.testData.length; j++) {
+        test.ok(this.testData[j].socketSendStub.calledOnce);
+        test.ok(this.testData[j].socketCloseStub.calledOnce);
+      }
+
+      test.strictEqual(this.createSocketStub.callCount, this.testData.length);
+
+      test.done();
+    });
+  },
+
+  'send cancel.': function(test) {
+    const parallelSendStrategy = new ParallelSendStrategy(this.testData, anyPort, anyRequest);
+    parallelSendStrategy.send((error, message) => {
+      // We should not get a callback as the send got cancelled.
+      test.ok(false, 'Should never get here.');
+    });
+
+    parallelSendStrategy.cancel();
+
+    for (let j = 0; j < this.testData.length; j++) {
+      test.ok(this.testData[j].socketSendStub.calledOnce);
+      test.ok(this.testData[j].socketCloseStub.calledOnce);
+    }
+
+    test.strictEqual(this.createSocketStub.callCount, this.testData.length);
+
+    test.done();
   }
 };
