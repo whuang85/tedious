@@ -128,81 +128,42 @@ exports['Sender send to IP address'] = {
 };
 
 
-// Implementation for testing all variations of sending a message to hostname.
-const sendToHostAddressImpl = function(test, sinon, multiSubnetFailover, sendResult, lookupError) {
-  // Set of IP addresses to be returned by stubbed out lookupAll method.
-  const addresses = [
-    { address: '127.0.0.2' },
-    { address: '2002:20:0:0:0:0:1:3' },
-    { address: '127.0.0.4' }
-  ];
-
-  // Since we're testing Sender class, we just want to verify that the 'send' method
-  // on the right strategy class is being invoked. So we create the strategy class and
-  // stub out the send method. In depth testing of the strategy classes will be done
-  // in the unit tests for the respective classes.
-  let testStrategy;
-  if (multiSubnetFailover) {
-    testStrategy = new ParallelSendStrategy(addresses, anyPort, anyRequest);
-  } else {
-    testStrategy = new SequentialSendStrategy(addresses, anyPort, anyRequest);
-  }
-
-  // Stub send method on the strategy class.
+const sendToHostCommonTestSetup = function(lookupError, multiSubnetFailover, testStrategy, createStrategyMethod) {
+  // Since we're testing Sender class, we just want to verify that the 'send' and/or
+  // 'cancel' method on the right strategy class are/is being invoked. So we stub out
+  // the methods to validate they're invoked correctly.
   const callback = () => { };
-  const strategySendStub = sinon.stub(testStrategy, 'send');
-  strategySendStub.withArgs(callback);
+  this.strategySendStub = this.sinon.stub(testStrategy, 'send');
+  this.strategySendStub.withArgs(callback);
+  this.strategyCancelStub = this.sinon.stub(testStrategy, 'cancel');
+  this.strategyCancelStub.withArgs();
 
-  const sender = new Sender(anyHost, anyPort, anyRequest, multiSubnetFailover);
+  this.sender = new Sender(anyHost, anyPort, anyRequest, multiSubnetFailover);
 
   // Stub out the lookupAll method to prevent network activity from doing a DNS
   // lookup. Succeeds or fails depending on lookupError.
-  const lookupAllStub = sinon.stub(sender, 'invokeLookupAll');
-  lookupAllStub.callsArgWith(1, lookupError, addresses);
+  this.lookupAllStub = this.sinon.stub(this.sender, 'invokeLookupAll');
+  this.lookupAllStub.callsArgWith(1, lookupError, this.addresses);
 
-  // Stub the appropriate create strategy method for the test to returns a strategy
-  // object created exactly like the method would but with a few methods stubbed.
-  let createStrategyStub;
-  if (multiSubnetFailover) {
-    createStrategyStub = sinon.stub(sender, 'createParallelSendStrategy');
-  } else {
-    createStrategyStub = sinon.stub(sender, 'createSequentialSendStrategy');
-  }
+  // Stub the create strategy method for the test to return a strategy object created
+  // exactly like the method would but with a few methods stubbed.
+  this.createStrategyStub = this.sinon.stub(this.sender, createStrategyMethod);
+  this.createStrategyStub.withArgs(this.addresses, anyPort, anyRequest).returns(testStrategy);
 
-  createStrategyStub.withArgs(addresses, anyPort, anyRequest).returns(testStrategy);
-
-  sender.execute(callback);
-
-  if (sendResult === sendResultCancel) {
-    const strategyCancelStub = sinon.stub(testStrategy, 'cancel');
-    sender.cancel();
-
-    if (lookupError) {
-      // When there is lookupError, the strategy object does not get created.
-      // So there will not be a cancel call on the strategy object.
-      test.strictEqual(strategyCancelStub.callCount, 0);
-    } else {
-      test.ok(strategyCancelStub.calledOnce);
-    }
-  }
-
-  test.ok(lookupAllStub.calledOnce);
-
-  if (lookupError) {
-    // No strategy object creation and hence no send on lookupError.
-    test.strictEqual(createStrategyStub.callCount, 0);
-    test.strictEqual(strategySendStub.callCount, 0);
-  } else {
-    test.ok(createStrategyStub.calledOnce);
-    test.ok(strategySendStub.calledOnce);
-  }
-
-  test.done();
+  this.sender.execute(callback);
 };
 
 exports['Sender send to hostname'] = {
   setUp: function(done) {
     this.sinon = Sinon.sandbox.create();
+
+    // Set of IP addresses to be returned by stubbed out lookupAll method.
+    this.addresses = [
+      { address: '127.0.0.2' },
+      { address: '2002:20:0:0:0:0:1:3' },
+      { address: '127.0.0.4' }
+    ];
+
     done();
   },
 
@@ -214,31 +175,95 @@ exports['Sender send to hostname'] = {
   'send with MultiSubnetFailover': function(test) {
     const multiSubnetFailover = true;
     const lookupError = null;
-    sendToHostAddressImpl(test, this.sinon, multiSubnetFailover, sendResultSuccess, lookupError);
+    const testStrategy = new ParallelSendStrategy(this.addresses, anyPort, anyRequest);
+    const createStrategyMethod = 'createParallelSendStrategy';
+
+    sendToHostCommonTestSetup.call(this, lookupError, multiSubnetFailover, testStrategy, createStrategyMethod);
+
+    test.ok(this.lookupAllStub.calledOnce);
+    test.ok(this.createStrategyStub.calledOnce);
+    test.ok(this.strategySendStub.calledOnce);
+    test.done();
   },
 
   'send with MultiSubnetFailover cancel': function(test) {
     const multiSubnetFailover = true;
     const lookupError = null;
-    sendToHostAddressImpl(test, this.sinon, multiSubnetFailover, sendResultCancel, lookupError);
+    const testStrategy = new ParallelSendStrategy(this.addresses, anyPort, anyRequest);
+    const createStrategyMethod = 'createParallelSendStrategy';
+
+    sendToHostCommonTestSetup.call(this, lookupError, multiSubnetFailover, testStrategy, createStrategyMethod);
+    this.sender.cancel();
+
+    test.ok(this.lookupAllStub.calledOnce);
+    test.ok(this.createStrategyStub.calledOnce);
+    test.ok(this.strategySendStub.calledOnce);
+    test.ok(this.strategyCancelStub.calledOnce);
+    test.done();
   },
 
   'send without MultiSubnetFailover': function(test) {
     const multiSubnetFailover = false;
     const lookupError = null;
-    sendToHostAddressImpl(test, this.sinon, multiSubnetFailover, sendResultSuccess, lookupError);
+    const testStrategy = new SequentialSendStrategy(this.addresses, anyPort, anyRequest);
+    const createStrategyMethod = 'createSequentialSendStrategy';
+
+    sendToHostCommonTestSetup.call(this, lookupError, multiSubnetFailover, testStrategy, createStrategyMethod);
+
+    test.ok(this.lookupAllStub.calledOnce);
+    test.ok(this.createStrategyStub.calledOnce);
+    test.ok(this.strategySendStub.calledOnce);
+    test.done();
   },
 
   'send without MultiSubnetFailover cancel': function(test) {
     const multiSubnetFailover = false;
     const lookupError = null;
-    sendToHostAddressImpl(test, this.sinon, multiSubnetFailover, sendResultCancel, lookupError);
+    const testStrategy = new SequentialSendStrategy(this.addresses, anyPort, anyRequest);
+    const createStrategyMethod = 'createSequentialSendStrategy';
+
+    sendToHostCommonTestSetup.call(this, lookupError, multiSubnetFailover, testStrategy, createStrategyMethod);
+    this.sender.cancel();
+
+    test.ok(this.lookupAllStub.calledOnce);
+    test.ok(this.createStrategyStub.calledOnce);
+    test.ok(this.strategySendStub.calledOnce);
+    test.ok(this.strategyCancelStub.calledOnce);
+    test.done();
   },
 
   'send lookup error': function(test) {
     const multiSubnetFailover = false;
-    const lookupError = new Error('some error');
-    sendToHostAddressImpl(test, this.sinon, multiSubnetFailover, sendResultCancel, lookupError);
+    const lookupError = new Error('some error.');
+    const testStrategy = new SequentialSendStrategy(this.addresses, anyPort, anyRequest);
+    const createStrategyMethod = 'createSequentialSendStrategy';
+
+    sendToHostCommonTestSetup.call(this, lookupError, multiSubnetFailover, testStrategy, createStrategyMethod);
+
+    test.ok(this.lookupAllStub.calledOnce);
+
+    // Strategy object should not be created on lookup error.
+    test.strictEqual(this.createStrategyStub.callCount, 0);
+    test.strictEqual(this.strategySendStub.callCount, 0);
+    test.done();
+  },
+
+  'send cancel on lookup error': function(test) {
+    const multiSubnetFailover = false;
+    const lookupError = new Error('some error.');
+    const testStrategy = new SequentialSendStrategy(this.addresses, anyPort, anyRequest);
+    const createStrategyMethod = 'createSequentialSendStrategy';
+
+    sendToHostCommonTestSetup.call(this, lookupError, multiSubnetFailover, testStrategy, createStrategyMethod);
+    this.sender.cancel();
+
+    test.ok(this.lookupAllStub.calledOnce);
+
+    // Strategy object should not be created on lookup error.
+    test.strictEqual(this.createStrategyStub.callCount, 0);
+    test.strictEqual(this.strategySendStub.callCount, 0);
+    test.strictEqual(this.strategyCancelStub.callCount, 0);
+    test.done();
   }
 };
 
