@@ -33,51 +33,23 @@ const sendStub = function(buffer, offset, length, port, ipAddress) {
   process.nextTick(emitEvent.bind(this));
 };
 
-// Implementation for testing all variations of sending a message to IP address.
-const sendToIpAddressImpl = function(test, sinon, ipAddress, udpVersionExpected, sendResult) {
+const sendToIpCommonTestSetup = function(ipAddress, udpVersion, sendResult, multiSubnetFailover) {
   // Create socket exactly like the Sender class would create while stubbing
   // some methods for unit testing.
-  const testSocket = Dgram.createSocket(udpVersionExpected);
-  const socketSendStub = sinon.stub(testSocket, 'send', sendStub);
-  const socketCloseStub = sinon.stub(testSocket, 'close');
+  this.testSocket = Dgram.createSocket(udpVersion);
+  this.socketSendStub = this.sinon.stub(this.testSocket, 'send', sendStub);
+  this.socketCloseStub = this.sinon.stub(this.testSocket, 'close');
 
   // This allows the emitEvent method to emit the right event for the given test.
-  testSocket.sendResult = sendResult;
+  this.testSocket.sendResult = sendResult;
 
   // Stub createSocket method to return a socket created exactly like the
   // method would but with a few methods stubbed out above.
-  const createSocketStub = sinon.stub(Dgram, 'createSocket');
-  createSocketStub.withArgs(udpVersionExpected).returns(testSocket);
+  this.createSocketStub = this.sinon.stub(Dgram, 'createSocket');
+  this.createSocketStub.withArgs(udpVersion).returns(this.testSocket);
 
-  const multiSubnetFailover = false;
-  const sender = new Sender(ipAddress, anyPort, anyRequest, multiSubnetFailover);
-
-  sender.execute((error, message) => {
-    if (sendResult === sendResultSuccess) {
-      test.strictEqual(error, null);
-      test.strictEqual(message, testSocket);
-    } else if (sendResult === sendResultError) {
-      test.strictEqual(error, testSocket);
-      test.strictEqual(message, undefined);
-    } else {
-      test.strictEqual(sendResult, sendResultCancel);
-      test.ok(false, 'Should never get here.');
-    }
-
-    test.ok(socketCloseStub.withArgs().calledOnce);
-    test.done();
-  });
-
-  test.ok(createSocketStub.calledOnce);
-  test.ok(socketSendStub.withArgs(anyRequest, 0, anyRequest.length, anyPort, ipAddress).calledOnce);
-
-  if (sendResult === sendResultCancel) {
-    sender.cancel();
-    test.ok(socketCloseStub.withArgs().calledOnce);
-    test.done();
-  }
+  this.sender = new Sender(ipAddress, anyPort, anyRequest, multiSubnetFailover);
 };
-
 
 exports['Sender send to IP address'] = {
   setUp: function(done) {
@@ -91,19 +63,67 @@ exports['Sender send to IP address'] = {
   },
 
   'send to IPv4': function(test) {
-    sendToIpAddressImpl(test, this.sinon, anyIpv4, udpIpv4, sendResultSuccess);
+    const multiSubnetFailover = false;
+    sendToIpCommonTestSetup.call(this, anyIpv4, udpIpv4, sendResultSuccess, multiSubnetFailover);
+
+    this.sender.execute((error, message) => {
+      test.strictEqual(error, null);
+      test.strictEqual(message, this.testSocket);
+
+      test.ok(this.socketCloseStub.withArgs().calledOnce);
+      test.done();
+    });
+
+    test.ok(this.createSocketStub.calledOnce);
+    test.ok(this.socketSendStub.withArgs(anyRequest, 0, anyRequest.length, anyPort, anyIpv4).calledOnce);
   },
 
   'send to IPv6': function(test) {
-    sendToIpAddressImpl(test, this.sinon, anyIpv6, udpIpv6, sendResultSuccess);
+    const multiSubnetFailover = true;
+    sendToIpCommonTestSetup.call(this, anyIpv6, udpIpv6, sendResultSuccess, multiSubnetFailover);
+
+    this.sender.execute((error, message) => {
+      test.strictEqual(error, null);
+      test.strictEqual(message, this.testSocket);
+
+      test.ok(this.socketCloseStub.withArgs().calledOnce);
+      test.done();
+    });
+
+    test.ok(this.createSocketStub.calledOnce);
+    test.ok(this.socketSendStub.withArgs(anyRequest, 0, anyRequest.length, anyPort, anyIpv6).calledOnce);
   },
 
   'send fails': function(test) {
-    sendToIpAddressImpl(test, this.sinon, anyIpv4, udpIpv4, sendResultError);
+    const multiSubnetFailover = true;
+    sendToIpCommonTestSetup.call(this, anyIpv4, udpIpv4, sendResultError, multiSubnetFailover);
+
+    this.sender.execute((error, message) => {
+      test.strictEqual(error, this.testSocket);
+      test.strictEqual(message, undefined);
+
+      test.ok(this.socketCloseStub.withArgs().calledOnce);
+      test.done();
+    });
+
+    test.ok(this.createSocketStub.calledOnce);
+    test.ok(this.socketSendStub.withArgs(anyRequest, 0, anyRequest.length, anyPort, anyIpv4).calledOnce);
   },
 
   'send cancel': function(test) {
-    sendToIpAddressImpl(test, this.sinon, anyIpv4, udpIpv4, sendResultCancel);
+    const multiSubnetFailover = true;
+    sendToIpCommonTestSetup.call(this, anyIpv4, udpIpv4, sendResultCancel, multiSubnetFailover);
+
+    this.sender.execute((error, message) => {
+      test.ok(false, 'Should never get here.');
+    });
+
+    test.ok(this.createSocketStub.calledOnce);
+    test.ok(this.socketSendStub.withArgs(anyRequest, 0, anyRequest.length, anyPort, anyIpv4).calledOnce);
+
+    this.sender.cancel();
+    test.ok(this.socketCloseStub.withArgs().calledOnce);
+    test.done();
   }
 };
 
