@@ -143,7 +143,7 @@ const sendToHostCommonTestSetup = function(lookupError, multiSubnetFailover, tes
   // Stub out the lookupAll method to prevent network activity from doing a DNS
   // lookup. Succeeds or fails depending on lookupError.
   this.lookupAllStub = this.sinon.stub(this.sender, 'invokeLookupAll');
-  this.lookupAllStub.callsArgWith(1, lookupError, this.addresses);
+  this.lookupAllStub.callsArgWithAsync(1, lookupError, this.addresses);
 
   // Stub the create strategy method for the test to return a strategy object created
   // exactly like the method would but with a few methods stubbed.
@@ -172,6 +172,9 @@ exports['Sender send to hostname'] = {
     done();
   },
 
+  // lookupAll is async. So we push out validation to next tick to run
+  // after lookupAll asyn callback is done in all the tests below.
+
   'send with MultiSubnetFailover': function(test) {
     const multiSubnetFailover = true;
     const lookupError = null;
@@ -181,9 +184,14 @@ exports['Sender send to hostname'] = {
     sendToHostCommonTestSetup.call(this, lookupError, multiSubnetFailover, testStrategy, createStrategyMethod);
 
     test.ok(this.lookupAllStub.calledOnce);
-    test.ok(this.createStrategyStub.calledOnce);
-    test.ok(this.strategySendStub.calledOnce);
-    test.done();
+
+    const validate = () => {
+      test.ok(this.createStrategyStub.calledOnce);
+      test.ok(this.strategySendStub.calledOnce);
+      test.done();
+    };
+
+    process.nextTick(validate);
   },
 
   'send with MultiSubnetFailover cancel': function(test) {
@@ -193,13 +201,19 @@ exports['Sender send to hostname'] = {
     const createStrategyMethod = 'createParallelSendStrategy';
 
     sendToHostCommonTestSetup.call(this, lookupError, multiSubnetFailover, testStrategy, createStrategyMethod);
-    this.sender.cancel();
 
     test.ok(this.lookupAllStub.calledOnce);
-    test.ok(this.createStrategyStub.calledOnce);
-    test.ok(this.strategySendStub.calledOnce);
-    test.ok(this.strategyCancelStub.calledOnce);
-    test.done();
+
+    const validate = () => {
+      test.ok(this.createStrategyStub.calledOnce);
+      test.ok(this.strategySendStub.calledOnce);
+
+      this.sender.cancel();
+      test.ok(this.strategyCancelStub.calledOnce);
+      test.done();
+    };
+
+    process.nextTick(validate);
   },
 
   'send without MultiSubnetFailover': function(test) {
@@ -211,9 +225,14 @@ exports['Sender send to hostname'] = {
     sendToHostCommonTestSetup.call(this, lookupError, multiSubnetFailover, testStrategy, createStrategyMethod);
 
     test.ok(this.lookupAllStub.calledOnce);
-    test.ok(this.createStrategyStub.calledOnce);
-    test.ok(this.strategySendStub.calledOnce);
-    test.done();
+
+    const validate = () => {
+      test.ok(this.createStrategyStub.calledOnce);
+      test.ok(this.strategySendStub.calledOnce);
+      test.done();
+    };
+
+    process.nextTick(validate);
   },
 
   'send without MultiSubnetFailover cancel': function(test) {
@@ -223,13 +242,19 @@ exports['Sender send to hostname'] = {
     const createStrategyMethod = 'createSequentialSendStrategy';
 
     sendToHostCommonTestSetup.call(this, lookupError, multiSubnetFailover, testStrategy, createStrategyMethod);
-    this.sender.cancel();
 
     test.ok(this.lookupAllStub.calledOnce);
-    test.ok(this.createStrategyStub.calledOnce);
-    test.ok(this.strategySendStub.calledOnce);
-    test.ok(this.strategyCancelStub.calledOnce);
-    test.done();
+
+    const validate = () => {
+      test.ok(this.createStrategyStub.calledOnce);
+      test.ok(this.strategySendStub.calledOnce);
+
+      this.sender.cancel();
+      test.ok(this.strategyCancelStub.calledOnce);
+      test.done();
+    };
+
+    process.nextTick(validate);
   },
 
   'send lookup error': function(test) {
@@ -242,10 +267,14 @@ exports['Sender send to hostname'] = {
 
     test.ok(this.lookupAllStub.calledOnce);
 
-    // Strategy object should not be created on lookup error.
-    test.strictEqual(this.createStrategyStub.callCount, 0);
-    test.strictEqual(this.strategySendStub.callCount, 0);
-    test.done();
+    const validate = () => {
+      // Strategy object should not be created on lookup error.
+      test.strictEqual(this.createStrategyStub.callCount, 0);
+      test.strictEqual(this.strategySendStub.callCount, 0);
+      test.done();
+    };
+
+    process.nextTick(validate);
   },
 
   'send cancel on lookup error': function(test) {
@@ -259,11 +288,15 @@ exports['Sender send to hostname'] = {
 
     test.ok(this.lookupAllStub.calledOnce);
 
-    // Strategy object should not be created on lookup error.
-    test.strictEqual(this.createStrategyStub.callCount, 0);
-    test.strictEqual(this.strategySendStub.callCount, 0);
-    test.strictEqual(this.strategyCancelStub.callCount, 0);
-    test.done();
+    const validate = () => {
+      // Strategy object should not be created on lookup error.
+      test.strictEqual(this.createStrategyStub.callCount, 0);
+      test.strictEqual(this.strategySendStub.callCount, 0);
+      test.strictEqual(this.strategyCancelStub.callCount, 0);
+      test.done();
+    };
+
+    process.nextTick(validate);
   }
 };
 
