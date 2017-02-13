@@ -4,7 +4,7 @@ const dgram = require('dgram');
 const lookupAll = require('dns-lookup-all');
 const net = require('net');
 
-function sendDgramSocketRequest(ipAddress, port, request, onError, onMessage) {
+function createDgramSocket(ipAddress, onError, onMessage) {
   let ipType;
 
   if (net.isIPv4(ipAddress)) {
@@ -17,8 +17,6 @@ function sendDgramSocketRequest(ipAddress, port, request, onError, onMessage) {
 
   socket.on('error', onError);
   socket.on('message', onMessage);
-  socket.send(request, 0, request.length, port, ipAddress);
-
   return socket;
 }
 
@@ -61,7 +59,8 @@ class Sender {
       cb(null, message);
     };
 
-    this.socket = sendDgramSocketRequest(this.host, this.port, this.request, onError, onMessage);
+    this.socket = createDgramSocket(this.host, onError, onMessage);
+    this.socket.send(this.request, 0, this.request.length, this.port, this.host);
 
     this.onError = onError;
     this.onMessage = onMessage;
@@ -155,7 +154,8 @@ class ParallelSendStrategy {
     };
 
     for (let j = 0; j < this.addresses.length; j++) {
-      this.sockets[j] = sendDgramSocketRequest(this.addresses[j].address, this.port, this.request, onError, onMessage);
+      this.sockets[j] = createDgramSocket(this.addresses[j].address, onError, onMessage);
+      this.sockets[j].send(this.request, 0, this.request.length, this.port, this.addresses[j].address);
     }
 
     this.onError = onError;
@@ -204,8 +204,8 @@ class SequentialSendStrategy {
       cb(null, message);
     };
 
-    this.socket = sendDgramSocketRequest(
-      this.addresses[this.next].address, this.port, this.request, onError, onMessage);
+    this.socket = createDgramSocket(this.addresses[this.next].address, onError, onMessage);
+    this.socket.send(this.request, 0, this.request.length, this.port, this.addresses[this.next].address);
     this.next++;
 
     this.onError = onError;
