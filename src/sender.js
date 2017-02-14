@@ -30,17 +30,15 @@ function clearSocket(socket, onError, onMessage) {
 }
 
 class Sender {
-  constructor(host, port, request, multiSubnetFailover) {
+  constructor(host, port, request) {
     this.host = host;
     this.port = port;
     this.request = request;
-    this.multiSubnetFailover = multiSubnetFailover;
 
     this.socket = null;
     this.onError = null;
     this.onMessage = null;
     this.parallelSendStrategy = null;
-    this.sequentialSendStrategy = null;
   }
 
   execute(cb) {
@@ -80,25 +78,15 @@ class Sender {
     return new ParallelSendStrategy(addresses, port, request);
   }
 
-  createSequentialSendStrategy(addresses, port, request) {
-    return new SequentialSendStrategy(addresses, port, request);
-  }
-
   executeForHostname(cb) {
     this.invokeLookupAll(this.host, (err, addresses) => {
       if (err) {
         return cb(err);
       }
 
-      if (this.multiSubnetFailover) {
-        this.parallelSendStrategy =
-          this.createParallelSendStrategy(addresses, this.port, this.request);
-        this.parallelSendStrategy.send(cb);
-      } else {
-        this.sequentialSendStrategy =
-          this.createSequentialSendStrategy(addresses, this.port, this.request);
-        this.sequentialSendStrategy.send(cb);
-      }
+      this.parallelSendStrategy =
+        this.createParallelSendStrategy(addresses, this.port, this.request);
+      this.parallelSendStrategy.send(cb);
     });
   }
 
@@ -108,8 +96,6 @@ class Sender {
       this.socket = null;
     } else if (this.parallelSendStrategy) {
       this.parallelSendStrategy.cancel();
-    } else if (this.sequentialSendStrategy) {
-      this.sequentialSendStrategy.cancel();
     }
   }
 }
@@ -120,109 +106,84 @@ class ParallelSendStrategy {
     this.port = port;
     this.request = request;
 
-    this.sockets = new Array(addresses.length);
+    this.socketV4 = null;
+    this.socketV6 = null;
     this.onError = null;
     this.onMessage = null;
   }
 
   send(cb) {
-    const that = this;
-
     let errorCount = 0;
-    const onError = function(err) {
-      clearSocket(this, onError, onMessage);
 
-      for (let j = 0; j < that.sockets.length; j++) {
-        if (that.sockets[j] === this) {
-          that.sockets[j] = null;
-          break;
+    const onError = (err) => {
+      errorCount++;
+
+      if (errorCount === this.addresses.length) {
+        if (this.socketV4) {
+          clearSocket(this.socketV4, this.onError, this.onMessage);
+          this.socketV4 = null;
         }
-      }
 
-      errorCount += 1;
-      if (errorCount === that.addresses.length) {
+        if (this.socketV6) {
+          clearSocket(this.socketV6, this.onError, this.onMessage);
+          this.socketV6 = null;
+        }
+
         cb(err);
       }
     };
 
-    const onMessage = function(message) {
-      for (let j = 0; j < that.sockets.length; j++) {
-        if (that.sockets[j]) {
-          clearSocket(that.sockets[j], onError, onMessage);
-          that.sockets[j] = null;
-        }
+    const onMessage = (message) => {
+      if (this.socketV4) {
+        clearSocket(this.socketV4, this.onError, this.onMessage);
+        this.socketV4 = null;
+      }
+
+      if (this.socketV6) {
+        clearSocket(this.socketV6, this.onError, this.onMessage);
+        this.socketV6 = null;
       }
 
       cb(null, message);
     };
 
     for (let j = 0; j < this.addresses.length; j++) {
-      this.sockets[j] = createDgramSocket(getUdpType(this.addresses[j].address), onError, onMessage);
-      this.sockets[j].send(this.request, 0, this.request.length, this.port, this.addresses[j].address);
-    }
+      const udpType = getUdpType(this.addresses[j].address);
+      let socket;
 
-    this.onError = onError;
-    this.onMessage = onMessage;
-  }
+      if (udpType === udpTypeV4) {
+        if (!this.socketV4) {
+          this.socketV4 = createDgramSocket('udp4', onError, onMessage);
+        }
 
-  cancel() {
-    for (let j = 0; j < this.sockets.length; j++) {
-      if (this.sockets[j]) {
-        clearSocket(this.sockets[j], this.onError, this.onMessage);
-        this.sockets[j] = null;
-      }
-    }
-  }
-}
-
-class SequentialSendStrategy {
-  constructor(addresses, port, request) {
-    this.addresses = addresses;
-    this.port = port;
-    this.request = request;
-
-    this.socket = null;
-    this.onError = null;
-    this.onMessage = null;
-    this.next = 0;
-  }
-
-  send(cb) {
-    const that = this;
-
-    const onError = function(err) {
-      clearSocket(this, onError, onMessage);
-      that.socket = null;
-
-      if (that.addresses.length > that.next) {
-        that.send(cb);
+        socket = this.socketV4;
       } else {
-        cb(err);
+        if (!this.socketV6) {
+          this.socketV6 = createDgramSocket(getUdpType(this.addresses[j].address), onError, onMessage);
+        }
+
+        socket = this.socketV6;
       }
-    };
 
-    const onMessage = function(message) {
-      clearSocket(this, onError, onMessage);
-      that.socket = null;
-      cb(null, message);
-    };
-
-    this.socket = createDgramSocket(getUdpType(this.addresses[this.next].address), onError, onMessage);
-    this.socket.send(this.request, 0, this.request.length, this.port, this.addresses[this.next].address);
-    this.next++;
+      socket.send(this.request, 0, this.request.length, this.port, this.addresses[j].address);
+    }
 
     this.onError = onError;
     this.onMessage = onMessage;
   }
 
   cancel() {
-    if (this.socket) {
-      clearSocket(this.socket, this.onError, this.onMessage);
-      this.socket = null;
+    if (this.socketV4) {
+      clearSocket(this.socketV4, this.onError, this.onMessage);
+      this.socketV4 = null;
+    }
+
+    if (this.socketV6) {
+      clearSocket(this.socketV6, this.onError, this.onMessage);
+      this.socketV6 = null;
     }
   }
 }
 
 module.exports.Sender = Sender;
 module.exports.ParallelSendStrategy = ParallelSendStrategy;
-module.exports.SequentialSendStrategy = SequentialSendStrategy;

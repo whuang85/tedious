@@ -3,7 +3,6 @@
 const Dgram = require('dgram');
 const Sender = require('../../src/sender').Sender;
 const ParallelSendStrategy = require('../../src/sender').ParallelSendStrategy;
-const SequentialSendStrategy = require('../../src/sender').SequentialSendStrategy;
 const Sinon = require('sinon');
 
 const anyPort = 1234;
@@ -22,9 +21,13 @@ const sendResultCancel = 2;
 // Stub function to mimic socket emitting 'error' and 'message' events.
 const emitEvent = function() {
   if (this.sendResult === sendResultError) {
-    this.emit('error', this);
+    if (this.listenerCount('error') > 0) {
+      this.emit('error', this);
+    }
   } else {
-    this.emit('message', this);
+    if (this.listenerCount('message') > 0) {
+      this.emit('message', this);
+    }
   }
 };
 
@@ -33,7 +36,7 @@ const sendStub = function(buffer, offset, length, port, ipAddress) {
   process.nextTick(emitEvent.bind(this));
 };
 
-const sendToIpCommonTestSetup = function(ipAddress, udpVersion, sendResult, multiSubnetFailover) {
+const sendToIpCommonTestSetup = function(ipAddress, udpVersion, sendResult) {
   // Create socket exactly like the Sender class would create while stubbing
   // some methods for unit testing.
   this.testSocket = Dgram.createSocket(udpVersion);
@@ -48,7 +51,7 @@ const sendToIpCommonTestSetup = function(ipAddress, udpVersion, sendResult, mult
   this.createSocketStub = this.sinon.stub(Dgram, 'createSocket');
   this.createSocketStub.withArgs(udpVersion).returns(this.testSocket);
 
-  this.sender = new Sender(ipAddress, anyPort, anyRequest, multiSubnetFailover);
+  this.sender = new Sender(ipAddress, anyPort, anyRequest);
 };
 
 exports['Sender send to IP address'] = {
@@ -63,8 +66,7 @@ exports['Sender send to IP address'] = {
   },
 
   'send to IPv4': function(test) {
-    const multiSubnetFailover = false;
-    sendToIpCommonTestSetup.call(this, anyIpv4, udpIpv4, sendResultSuccess, multiSubnetFailover);
+    sendToIpCommonTestSetup.call(this, anyIpv4, udpIpv4, sendResultSuccess);
 
     this.sender.execute((error, message) => {
       test.strictEqual(error, null);
@@ -79,8 +81,7 @@ exports['Sender send to IP address'] = {
   },
 
   'send to IPv6': function(test) {
-    const multiSubnetFailover = true;
-    sendToIpCommonTestSetup.call(this, anyIpv6, udpIpv6, sendResultSuccess, multiSubnetFailover);
+    sendToIpCommonTestSetup.call(this, anyIpv6, udpIpv6, sendResultSuccess);
 
     this.sender.execute((error, message) => {
       test.strictEqual(error, null);
@@ -95,8 +96,7 @@ exports['Sender send to IP address'] = {
   },
 
   'send fails': function(test) {
-    const multiSubnetFailover = true;
-    sendToIpCommonTestSetup.call(this, anyIpv4, udpIpv4, sendResultError, multiSubnetFailover);
+    sendToIpCommonTestSetup.call(this, anyIpv4, udpIpv4, sendResultError);
 
     this.sender.execute((error, message) => {
       test.strictEqual(error, this.testSocket);
@@ -111,8 +111,7 @@ exports['Sender send to IP address'] = {
   },
 
   'send cancel': function(test) {
-    const multiSubnetFailover = true;
-    sendToIpCommonTestSetup.call(this, anyIpv4, udpIpv4, sendResultCancel, multiSubnetFailover);
+    sendToIpCommonTestSetup.call(this, anyIpv4, udpIpv4, sendResultCancel);
 
     this.sender.execute((error, message) => {
       test.ok(false, 'Should never get here.');
@@ -128,7 +127,7 @@ exports['Sender send to IP address'] = {
 };
 
 
-const sendToHostCommonTestSetup = function(lookupError, multiSubnetFailover, testStrategy, createStrategyMethod) {
+const sendToHostCommonTestSetup = function(lookupError, testStrategy, createStrategyMethod) {
   // Since we're testing Sender class, we just want to verify that the 'send' and/or
   // 'cancel' method on the right strategy class are/is being invoked. So we stub out
   // the methods to validate they're invoked correctly.
@@ -138,7 +137,7 @@ const sendToHostCommonTestSetup = function(lookupError, multiSubnetFailover, tes
   this.strategyCancelStub = this.sinon.stub(testStrategy, 'cancel');
   this.strategyCancelStub.withArgs();
 
-  this.sender = new Sender(anyHost, anyPort, anyRequest, multiSubnetFailover);
+  this.sender = new Sender(anyHost, anyPort, anyRequest);
 
   // Stub out the lookupAll method to prevent network activity from doing a DNS
   // lookup. Succeeds or fails depending on lookupError.
@@ -175,13 +174,12 @@ exports['Sender send to hostname'] = {
   // lookupAll is async. So we push out validation to next tick to run
   // after lookupAll asyn callback is done in all the tests below.
 
-  'send with MultiSubnetFailover': function(test) {
-    const multiSubnetFailover = true;
+  'send basic': function(test) {
     const lookupError = null;
     const testStrategy = new ParallelSendStrategy(this.addresses, anyPort, anyRequest);
     const createStrategyMethod = 'createParallelSendStrategy';
 
-    sendToHostCommonTestSetup.call(this, lookupError, multiSubnetFailover, testStrategy, createStrategyMethod);
+    sendToHostCommonTestSetup.call(this, lookupError, testStrategy, createStrategyMethod);
 
     test.ok(this.lookupAllStub.calledOnce);
 
@@ -194,54 +192,12 @@ exports['Sender send to hostname'] = {
     process.nextTick(validate);
   },
 
-  'send with MultiSubnetFailover cancel': function(test) {
-    const multiSubnetFailover = true;
+  'send cancel': function(test) {
     const lookupError = null;
     const testStrategy = new ParallelSendStrategy(this.addresses, anyPort, anyRequest);
     const createStrategyMethod = 'createParallelSendStrategy';
 
-    sendToHostCommonTestSetup.call(this, lookupError, multiSubnetFailover, testStrategy, createStrategyMethod);
-
-    test.ok(this.lookupAllStub.calledOnce);
-
-    const validate = () => {
-      test.ok(this.createStrategyStub.calledOnce);
-      test.ok(this.strategySendStub.calledOnce);
-
-      this.sender.cancel();
-      test.ok(this.strategyCancelStub.calledOnce);
-      test.done();
-    };
-
-    process.nextTick(validate);
-  },
-
-  'send without MultiSubnetFailover': function(test) {
-    const multiSubnetFailover = false;
-    const lookupError = null;
-    const testStrategy = new SequentialSendStrategy(this.addresses, anyPort, anyRequest);
-    const createStrategyMethod = 'createSequentialSendStrategy';
-
-    sendToHostCommonTestSetup.call(this, lookupError, multiSubnetFailover, testStrategy, createStrategyMethod);
-
-    test.ok(this.lookupAllStub.calledOnce);
-
-    const validate = () => {
-      test.ok(this.createStrategyStub.calledOnce);
-      test.ok(this.strategySendStub.calledOnce);
-      test.done();
-    };
-
-    process.nextTick(validate);
-  },
-
-  'send without MultiSubnetFailover cancel': function(test) {
-    const multiSubnetFailover = false;
-    const lookupError = null;
-    const testStrategy = new SequentialSendStrategy(this.addresses, anyPort, anyRequest);
-    const createStrategyMethod = 'createSequentialSendStrategy';
-
-    sendToHostCommonTestSetup.call(this, lookupError, multiSubnetFailover, testStrategy, createStrategyMethod);
+    sendToHostCommonTestSetup.call(this, lookupError, testStrategy, createStrategyMethod);
 
     test.ok(this.lookupAllStub.calledOnce);
 
@@ -258,12 +214,11 @@ exports['Sender send to hostname'] = {
   },
 
   'send lookup error': function(test) {
-    const multiSubnetFailover = false;
     const lookupError = new Error('some error.');
-    const testStrategy = new SequentialSendStrategy(this.addresses, anyPort, anyRequest);
-    const createStrategyMethod = 'createSequentialSendStrategy';
+    const testStrategy = new ParallelSendStrategy(this.addresses, anyPort, anyRequest);
+    const createStrategyMethod = 'createParallelSendStrategy';
 
-    sendToHostCommonTestSetup.call(this, lookupError, multiSubnetFailover, testStrategy, createStrategyMethod);
+    sendToHostCommonTestSetup.call(this, lookupError, testStrategy, createStrategyMethod);
 
     test.ok(this.lookupAllStub.calledOnce);
 
@@ -278,12 +233,11 @@ exports['Sender send to hostname'] = {
   },
 
   'send cancel on lookup error': function(test) {
-    const multiSubnetFailover = false;
     const lookupError = new Error('some error.');
-    const testStrategy = new SequentialSendStrategy(this.addresses, anyPort, anyRequest);
-    const createStrategyMethod = 'createSequentialSendStrategy';
+    const testStrategy = new ParallelSendStrategy(this.addresses, anyPort, anyRequest);
+    const createStrategyMethod = 'createParallelSendStrategy';
 
-    sendToHostCommonTestSetup.call(this, lookupError, multiSubnetFailover, testStrategy, createStrategyMethod);
+    sendToHostCommonTestSetup.call(this, lookupError, testStrategy, createStrategyMethod);
     this.sender.cancel();
 
     test.ok(this.lookupAllStub.calledOnce);
@@ -310,26 +264,32 @@ const commonStrategyTestSetup = function() {
     { address: '5.6.7.8', udpVersion: udpIpv4 }
   ];
 
-  // Create sockets for each of the IP addresses with send and close stubbed out to
+  // Create sockets for IPv4 and IPv6 with send and close stubbed out to
   // prevent network activity.
-  for (let j = 0; j < this.testData.length; j++) {
-    this.testData[j].testSocket = Dgram.createSocket(this.testData[j].udpVersion);
-    this.testData[j].socketSendStub = this.sinon.stub(this.testData[j].testSocket, 'send', sendStub);
-    this.testData[j].socketCloseStub = this.sinon.stub(this.testData[j].testSocket, 'close');
+  this.testSockets = { };
+  this.testSockets[udpIpv4] = Dgram.createSocket(udpIpv4);
+  this.testSockets[udpIpv6] = Dgram.createSocket(udpIpv6);
+
+  let key;
+  for (key in this.testSockets) {
+    this.testSockets[key].socketSendStub = this.sinon.stub(this.testSockets[key], 'send', sendStub);
+    this.testSockets[key].socketCloseStub = this.sinon.stub(this.testSockets[key], 'close');
 
     // This allows emitEvent method to fire an 'error' or 'message' event appropriately.
     // A given test may overwrite this value for specific sockets to test different
     // scenarios.
-    this.testData[j].testSocket.sendResult = sendResultSuccess;
+    this.testSockets[key].sendResult = sendResultSuccess;
+  }
+
+  for (let j = 0; j < this.testData.length; j++) {
+    this.testData[j].testSocket = this.testSockets[this.testData[j].udpVersion];
   }
 
   // Stub createSocket method to returns a socket created exactly like the
   // method would but with a few methods stubbed out above.
   this.createSocketStub = this.sinon.stub(Dgram, 'createSocket');
-  this.createSocketStub.withArgs(udpIpv4).onFirstCall().returns(this.testData[0].testSocket);
-  this.createSocketStub.withArgs(udpIpv6).onFirstCall().returns(this.testData[1].testSocket);
-  this.createSocketStub.withArgs(udpIpv6).onSecondCall().returns(this.testData[2].testSocket);
-  this.createSocketStub.withArgs(udpIpv4).onSecondCall().returns(this.testData[3].testSocket);
+  this.createSocketStub.withArgs(udpIpv4).returns(this.testSockets[udpIpv4]);
+  this.createSocketStub.withArgs(udpIpv6).returns(this.testSockets[udpIpv6]);
 };
 
 exports['ParallelSendStrategy'] = {
@@ -349,90 +309,93 @@ exports['ParallelSendStrategy'] = {
     parallelSendStrategy.send((error, message) => {
       test.strictEqual(error, null);
 
-      // We should get the message only on the first socket.
-      test.strictEqual(message, this.testData[0].testSocket);
+      // We should get the message only on the first socket, which is Ipv4.
+      test.strictEqual(this.testData[0].udpVersion, udpIpv4);
+      test.strictEqual(message, this.testSockets[udpIpv4]);
 
-      for (let j = 0; j < this.testData.length; j++) {
-        test.ok(this.testData[j].socketSendStub.calledOnce);
-        test.ok(this.testData[j].socketCloseStub.calledOnce);
+      let key;
+      for (key in this.testSockets) {
+        test.strictEqual(this.testSockets[key].socketSendStub.callCount, 2);
+        test.strictEqual(this.testSockets[key].socketCloseStub.callCount, 1);
       }
 
-      test.strictEqual(this.createSocketStub.callCount, this.testData.length);
+      test.strictEqual(this.createSocketStub.callCount, 2);
 
       test.done();
     });
   },
 
-  'send one IP fail.': function(test) {
-    // Setup first socket to fail on socket send.
-    this.testData[0].testSocket.sendResult = sendResultError;
+  'send IPv4 fail.': function(test) {
+    // Setup sends to fail on Ipv4 socket.
+    this.testSockets[udpIpv4].sendResult = sendResultError;
 
     const parallelSendStrategy = new ParallelSendStrategy(this.testData, anyPort, anyRequest);
     parallelSendStrategy.send((error, message) => {
-      // Even though the first socket fails on send, we should not get an error
+      // Even though the IPv4 socket sends fail, we should not get an error
       // as the other sockets succeed.
       test.strictEqual(error, null);
 
-      // We setup the first send to fail. So we should get the message on the
-      // second socket.
-      test.strictEqual(message, this.testData[1].testSocket);
+      // We setup the IPv4 socket sends to fail. So we should get the message on the
+      // Ipv6 socket.
+      test.strictEqual(message, this.testSockets[udpIpv6]);
 
-      for (let j = 0; j < this.testData.length; j++) {
-        test.ok(this.testData[j].socketSendStub.calledOnce);
-        test.ok(this.testData[j].socketCloseStub.calledOnce);
+      let key;
+      for (key in this.testSockets) {
+        test.strictEqual(this.testSockets[key].socketSendStub.callCount, 2);
+        test.strictEqual(this.testSockets[key].socketCloseStub.callCount, 1);
       }
 
-      test.strictEqual(this.createSocketStub.callCount, this.testData.length);
+      test.strictEqual(this.createSocketStub.callCount, 2);
 
       test.done();
     });
   },
 
-  'send two IPs fail.': function(test) {
-    // Setup first two sockets to fail on socket send.
-    this.testData[0].testSocket.sendResult = sendResultError;
-    this.testData[1].testSocket.sendResult = sendResultError;
+  'send IPv6 fail.': function(test) {
+    // Setup sends to fail on Ipv6 socket.
+    this.testSockets[udpIpv6].sendResult = sendResultError;
 
     const parallelSendStrategy = new ParallelSendStrategy(this.testData, anyPort, anyRequest);
     parallelSendStrategy.send((error, message) => {
-      // Even though the first two sockets fails on send, we should not get an error
+      // Even though the IPv6 socket sends fail, we should not get an error
       // as the other sockets succeed.
       test.strictEqual(error, null);
 
-      // We setup the first two sends to fail. So we should get the message on the
-      // third socket.
-      test.strictEqual(message, this.testData[2].testSocket);
+      // We setup the IPv6 socket sends to fail. So we should get the message on the
+      // Ipv4 socket.
+      test.strictEqual(message, this.testSockets[udpIpv4]);
 
-      for (let j = 0; j < this.testData.length; j++) {
-        test.ok(this.testData[j].socketSendStub.calledOnce);
-        test.ok(this.testData[j].socketCloseStub.calledOnce);
+      let key;
+      for (key in this.testSockets) {
+        test.strictEqual(this.testSockets[key].socketSendStub.callCount, 2);
+        test.strictEqual(this.testSockets[key].socketCloseStub.callCount, 1);
       }
 
-      test.strictEqual(this.createSocketStub.callCount, this.testData.length);
+      test.strictEqual(this.createSocketStub.callCount, 2);
 
       test.done();
     });
   },
 
   'send all IPs fail.': function(test) {
-    // Setup all sockets to fail on socket send.
-    for (let j = 0; j < this.testData.length; j++) {
-      this.testData[j].testSocket.sendResult = sendResultError;
-    }
+    // Setup IPv4 and IPv6 sockets to fail on socket send.
+    this.testSockets[udpIpv4].sendResult = sendResultError;
+    this.testSockets[udpIpv6].sendResult = sendResultError;
 
     const parallelSendStrategy = new ParallelSendStrategy(this.testData, anyPort, anyRequest);
     parallelSendStrategy.send((error, message) => {
       // All socket sends fail. We should get an error on the last socket fail.
-      test.strictEqual(error, this.testData[this.testData.length - 1].testSocket);
+      test.strictEqual(error, this.testSockets[this.testData[this.testData.length - 1].udpVersion]);
 
       test.strictEqual(message, undefined);
 
-      for (let j = 0; j < this.testData.length; j++) {
-        test.ok(this.testData[j].socketSendStub.calledOnce);
-        test.ok(this.testData[j].socketCloseStub.calledOnce);
+      let key;
+      for (key in this.testSockets) {
+        test.strictEqual(this.testSockets[key].socketSendStub.callCount, 2);
+        test.strictEqual(this.testSockets[key].socketCloseStub.callCount, 1);
       }
 
-      test.strictEqual(this.createSocketStub.callCount, this.testData.length);
+      test.strictEqual(this.createSocketStub.callCount, 2);
 
       test.done();
     });
@@ -447,157 +410,13 @@ exports['ParallelSendStrategy'] = {
 
     parallelSendStrategy.cancel();
 
-    for (let j = 0; j < this.testData.length; j++) {
-      test.ok(this.testData[j].socketSendStub.calledOnce);
-      test.ok(this.testData[j].socketCloseStub.calledOnce);
+    let key;
+    for (key in this.testSockets) {
+      test.strictEqual(this.testSockets[key].socketSendStub.callCount, 2);
+      test.strictEqual(this.testSockets[key].socketCloseStub.callCount, 1);
     }
 
-    test.strictEqual(this.createSocketStub.callCount, this.testData.length);
-
-    test.done();
-  }
-};
-
-exports['SequentialSendStrategy'] = {
-  setUp: function(done) {
-    this.sinon = Sinon.sandbox.create();
-    commonStrategyTestSetup.call(this);
-    done();
-  },
-
-  tearDown: function(done) {
-    this.sinon.restore();
-    done();
-  },
-
-  'send all IPs success.': function(test) {
-    const sequentialSendStrategy = new SequentialSendStrategy(this.testData, anyPort, anyRequest);
-    sequentialSendStrategy.send((error, message) => {
-      test.strictEqual(error, null);
-
-      // We should get the message only on the first socket.
-      test.strictEqual(message, this.testData[0].testSocket);
-
-      test.ok(this.testData[0].socketSendStub.calledOnce);
-      test.ok(this.testData[0].socketCloseStub.calledOnce);
-
-      // Send should be invoked only on the first socket.
-      for (let j = 1; j < this.testData.length; j++) {
-        test.strictEqual(this.testData[j].socketSendStub.callCount, 0);
-        test.strictEqual(this.testData[j].socketCloseStub.callCount, 0);
-      }
-
-      test.strictEqual(this.createSocketStub.callCount, 1);
-
-      test.done();
-    });
-  },
-
-  'send one IP fail.': function(test) {
-    // Setup first socket to fail on socket send.
-    this.testData[0].testSocket.sendResult = sendResultError;
-
-    const sequentialSendStrategy = new SequentialSendStrategy(this.testData, anyPort, anyRequest);
-    sequentialSendStrategy.send((error, message) => {
-      test.strictEqual(error, null);
-
-      // We should get the message on the second socket as the first one fails.
-      test.strictEqual(message, this.testData[1].testSocket);
-
-      // Send should be invoked only on the first two sockets.
-      for (let j = 0; j < this.testData.length; j++) {
-        if (j < 2) {
-          test.ok(this.testData[j].socketSendStub.calledOnce);
-          test.ok(this.testData[j].socketCloseStub.calledOnce);
-        } else {
-          test.strictEqual(this.testData[j].socketSendStub.callCount, 0);
-          test.strictEqual(this.testData[j].socketCloseStub.callCount, 0);
-        }
-      }
-
-      // Since the first socket send fails, we should have two invocations of createSocket.
-      test.strictEqual(this.createSocketStub.callCount, 2);
-
-      test.done();
-    });
-  },
-
-  'send two IPs fail.': function(test) {
-    // Setup first two socket to fail on socket send.
-    this.testData[0].testSocket.sendResult = sendResultError;
-    this.testData[1].testSocket.sendResult = sendResultError;
-
-    const sequentialSendStrategy = new SequentialSendStrategy(this.testData, anyPort, anyRequest);
-    sequentialSendStrategy.send((error, message) => {
-      test.strictEqual(error, null);
-
-      // We should get the message on the third socket as the first two fails.
-      test.strictEqual(message, this.testData[2].testSocket);
-
-      // Send should be invoked only on the first three sockets.
-      for (let j = 0; j < this.testData.length; j++) {
-        if (j < 3) {
-          test.ok(this.testData[j].socketSendStub.calledOnce);
-          test.ok(this.testData[j].socketCloseStub.calledOnce);
-        } else {
-          test.strictEqual(this.testData[j].socketSendStub.callCount, 0);
-          test.strictEqual(this.testData[j].socketCloseStub.callCount, 0);
-        }
-      }
-
-      // Since the first two socket sends fail, we should have three invocations of createSocket.
-      test.strictEqual(this.createSocketStub.callCount, 3);
-
-      test.done();
-    });
-  },
-
-  'send all IPs fail.': function(test) {
-    // Setup all sockets to fail on socket send.
-    for (let j = 0; j < this.testData.length; j++) {
-      this.testData[j].testSocket.sendResult = sendResultError;
-    }
-
-    const sequentialSendStrategy = new SequentialSendStrategy(this.testData, anyPort, anyRequest);
-    sequentialSendStrategy.send((error, message) => {
-      // All socket sends fail. We should get an error on the last socket fail.
-      test.strictEqual(error, this.testData[this.testData.length - 1].testSocket);
-
-      test.strictEqual(message, undefined);
-
-      // Send should be invoked on all sockets.
-      for (let j = 0; j < this.testData.length; j++) {
-        test.ok(this.testData[j].socketSendStub.calledOnce);
-        test.ok(this.testData[j].socketCloseStub.calledOnce);
-      }
-
-      test.strictEqual(this.createSocketStub.callCount, this.testData.length);
-
-      test.done();
-    });
-  },
-
-  'send cancel.': function(test) {
-    const sequentialSendStrategy = new SequentialSendStrategy(this.testData, anyPort, anyRequest);
-    sequentialSendStrategy.send((error, message) => {
-      // We should not get a callback as the send got cancelled.
-      test.ok(false, 'Should never get here.');
-    });
-
-    sequentialSendStrategy.cancel();
-
-    // Send should be invoked only on the first socket.
-    for (let j = 0; j < this.testData.length; j++) {
-      if (j === 0) {
-        test.ok(this.testData[j].socketSendStub.calledOnce);
-        test.ok(this.testData[j].socketCloseStub.calledOnce);
-      } else {
-        test.strictEqual(this.testData[j].socketSendStub.callCount, 0);
-        test.strictEqual(this.testData[j].socketCloseStub.callCount, 0);
-      }
-    }
-
-    test.strictEqual(this.createSocketStub.callCount, 1);
+    test.strictEqual(this.createSocketStub.callCount, 2);
 
     test.done();
   }
