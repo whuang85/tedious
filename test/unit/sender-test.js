@@ -41,7 +41,7 @@ const sendToIpCommonTestSetup = function(ipAddress, udpVersion, sendResult) {
   // some methods for unit testing.
   this.testSocket = Dgram.createSocket(udpVersion);
   this.socketSendStub = this.sinon.stub(this.testSocket, 'send', sendStub);
-  this.socketCloseStub = this.sinon.stub(this.testSocket, 'close');
+  this.socketCloseSpy = this.sinon.spy(this.testSocket, 'close');
 
   // This allows the emitEvent method to emit the right event for the given test.
   this.testSocket.sendResult = sendResult;
@@ -52,6 +52,11 @@ const sendToIpCommonTestSetup = function(ipAddress, udpVersion, sendResult) {
   this.createSocketStub.withArgs(udpVersion).returns(this.testSocket);
 
   this.sender = new Sender(ipAddress, anyPort, anyRequest);
+};
+
+const sendToIpCommonTestValidation = function(test, ipAddress) {
+  test.ok(this.createSocketStub.calledOnce);
+  test.ok(this.socketSendStub.withArgs(anyRequest, 0, anyRequest.length, anyPort, ipAddress).calledOnce);
 };
 
 exports['Sender send to IP address'] = {
@@ -72,12 +77,11 @@ exports['Sender send to IP address'] = {
       test.strictEqual(error, null);
       test.strictEqual(message, this.testSocket);
 
-      test.ok(this.socketCloseStub.withArgs().calledOnce);
+      test.ok(this.socketCloseSpy.withArgs().calledOnce);
       test.done();
     });
 
-    test.ok(this.createSocketStub.calledOnce);
-    test.ok(this.socketSendStub.withArgs(anyRequest, 0, anyRequest.length, anyPort, anyIpv4).calledOnce);
+    sendToIpCommonTestValidation.call(this, test, anyIpv4);
   },
 
   'send to IPv6': function(test) {
@@ -87,12 +91,11 @@ exports['Sender send to IP address'] = {
       test.strictEqual(error, null);
       test.strictEqual(message, this.testSocket);
 
-      test.ok(this.socketCloseStub.withArgs().calledOnce);
+      test.ok(this.socketCloseSpy.withArgs().calledOnce);
       test.done();
     });
 
-    test.ok(this.createSocketStub.calledOnce);
-    test.ok(this.socketSendStub.withArgs(anyRequest, 0, anyRequest.length, anyPort, anyIpv6).calledOnce);
+    sendToIpCommonTestValidation.call(this, test, anyIpv6);
   },
 
   'send fails': function(test) {
@@ -102,12 +105,11 @@ exports['Sender send to IP address'] = {
       test.strictEqual(error, this.testSocket);
       test.strictEqual(message, undefined);
 
-      test.ok(this.socketCloseStub.withArgs().calledOnce);
+      test.ok(this.socketCloseSpy.withArgs().calledOnce);
       test.done();
     });
 
-    test.ok(this.createSocketStub.calledOnce);
-    test.ok(this.socketSendStub.withArgs(anyRequest, 0, anyRequest.length, anyPort, anyIpv4).calledOnce);
+    sendToIpCommonTestValidation.call(this, test, anyIpv4);
   },
 
   'send cancel': function(test) {
@@ -117,20 +119,20 @@ exports['Sender send to IP address'] = {
       test.ok(false, 'Should never get here.');
     });
 
-    test.ok(this.createSocketStub.calledOnce);
-    test.ok(this.socketSendStub.withArgs(anyRequest, 0, anyRequest.length, anyPort, anyIpv4).calledOnce);
+    sendToIpCommonTestValidation.call(this, test, anyIpv4);
 
     this.sender.cancel();
-    test.ok(this.socketCloseStub.withArgs().calledOnce);
+    test.ok(this.socketCloseSpy.withArgs().calledOnce);
     test.done();
   }
 };
 
 
-const sendToHostCommonTestSetup = function(lookupError, testStrategy, createStrategyMethod) {
-  // Since we're testing Sender class, we just want to verify that the 'send' and/or
-  // 'cancel' method on the right strategy class are/is being invoked. So we stub out
+const sendToHostCommonTestSetup = function(lookupError) {
+  // Since we're testing Sender class, we just want to verify that the 'send'/'cancel'
+  // method(s) on the ParallelSendStrategy class are/is being invoked. So we stub out
   // the methods to validate they're invoked correctly.
+  const testStrategy = new ParallelSendStrategy(this.addresses, anyPort, anyRequest);
   const callback = () => { };
   this.strategySendStub = this.sinon.stub(testStrategy, 'send');
   this.strategySendStub.withArgs(callback);
@@ -146,7 +148,7 @@ const sendToHostCommonTestSetup = function(lookupError, testStrategy, createStra
 
   // Stub the create strategy method for the test to return a strategy object created
   // exactly like the method would but with a few methods stubbed.
-  this.createStrategyStub = this.sinon.stub(this.sender, createStrategyMethod);
+  this.createStrategyStub = this.sinon.stub(this.sender, 'createParallelSendStrategy');
   this.createStrategyStub.withArgs(this.addresses, anyPort, anyRequest).returns(testStrategy);
 
   this.sender.execute(callback);
@@ -176,10 +178,7 @@ exports['Sender send to hostname'] = {
 
   'send basic': function(test) {
     const lookupError = null;
-    const testStrategy = new ParallelSendStrategy(this.addresses, anyPort, anyRequest);
-    const createStrategyMethod = 'createParallelSendStrategy';
-
-    sendToHostCommonTestSetup.call(this, lookupError, testStrategy, createStrategyMethod);
+    sendToHostCommonTestSetup.call(this, lookupError);
 
     test.ok(this.lookupAllStub.calledOnce);
 
@@ -194,10 +193,7 @@ exports['Sender send to hostname'] = {
 
   'send cancel': function(test) {
     const lookupError = null;
-    const testStrategy = new ParallelSendStrategy(this.addresses, anyPort, anyRequest);
-    const createStrategyMethod = 'createParallelSendStrategy';
-
-    sendToHostCommonTestSetup.call(this, lookupError, testStrategy, createStrategyMethod);
+    sendToHostCommonTestSetup.call(this, lookupError);
 
     test.ok(this.lookupAllStub.calledOnce);
 
@@ -215,10 +211,8 @@ exports['Sender send to hostname'] = {
 
   'send lookup error': function(test) {
     const lookupError = new Error('some error.');
-    const testStrategy = new ParallelSendStrategy(this.addresses, anyPort, anyRequest);
-    const createStrategyMethod = 'createParallelSendStrategy';
 
-    sendToHostCommonTestSetup.call(this, lookupError, testStrategy, createStrategyMethod);
+    sendToHostCommonTestSetup.call(this, lookupError);
 
     test.ok(this.lookupAllStub.calledOnce);
 
@@ -234,10 +228,8 @@ exports['Sender send to hostname'] = {
 
   'send cancel on lookup error': function(test) {
     const lookupError = new Error('some error.');
-    const testStrategy = new ParallelSendStrategy(this.addresses, anyPort, anyRequest);
-    const createStrategyMethod = 'createParallelSendStrategy';
 
-    sendToHostCommonTestSetup.call(this, lookupError, testStrategy, createStrategyMethod);
+    sendToHostCommonTestSetup.call(this, lookupError);
     this.sender.cancel();
 
     test.ok(this.lookupAllStub.calledOnce);
@@ -273,7 +265,7 @@ const commonStrategyTestSetup = function() {
   let key;
   for (key in this.testSockets) {
     this.testSockets[key].socketSendStub = this.sinon.stub(this.testSockets[key], 'send', sendStub);
-    this.testSockets[key].socketCloseStub = this.sinon.stub(this.testSockets[key], 'close');
+    this.testSockets[key].socketCloseSpy = this.sinon.spy(this.testSockets[key], 'close');
 
     // This allows emitEvent method to fire an 'error' or 'message' event appropriately.
     // A given test may overwrite this value for specific sockets to test different
@@ -290,6 +282,20 @@ const commonStrategyTestSetup = function() {
   this.createSocketStub = this.sinon.stub(Dgram, 'createSocket');
   this.createSocketStub.withArgs(udpIpv4).returns(this.testSockets[udpIpv4]);
   this.createSocketStub.withArgs(udpIpv6).returns(this.testSockets[udpIpv6]);
+
+  this.parallelSendStrategy = new ParallelSendStrategy(this.testData, anyPort, anyRequest);
+};
+
+const commonStrategyTestValidation = function(test) {
+  let key;
+  for (key in this.testSockets) {
+    test.strictEqual(this.testSockets[key].socketSendStub.callCount, 2);
+    test.strictEqual(this.testSockets[key].socketCloseSpy.callCount, 1);
+  }
+
+  test.strictEqual(this.createSocketStub.callCount, 2);
+
+  test.done();
 };
 
 exports['ParallelSendStrategy'] = {
@@ -305,23 +311,13 @@ exports['ParallelSendStrategy'] = {
   },
 
   'send all IPs success.': function(test) {
-    const parallelSendStrategy = new ParallelSendStrategy(this.testData, anyPort, anyRequest);
-    parallelSendStrategy.send((error, message) => {
+    this.parallelSendStrategy.send((error, message) => {
       test.strictEqual(error, null);
 
       // We should get the message only on the first socket, which is Ipv4.
       test.strictEqual(this.testData[0].udpVersion, udpIpv4);
       test.strictEqual(message, this.testSockets[udpIpv4]);
-
-      let key;
-      for (key in this.testSockets) {
-        test.strictEqual(this.testSockets[key].socketSendStub.callCount, 2);
-        test.strictEqual(this.testSockets[key].socketCloseStub.callCount, 1);
-      }
-
-      test.strictEqual(this.createSocketStub.callCount, 2);
-
-      test.done();
+      commonStrategyTestValidation.call(this, test);
     });
   },
 
@@ -329,8 +325,7 @@ exports['ParallelSendStrategy'] = {
     // Setup sends to fail on Ipv4 socket.
     this.testSockets[udpIpv4].sendResult = sendResultError;
 
-    const parallelSendStrategy = new ParallelSendStrategy(this.testData, anyPort, anyRequest);
-    parallelSendStrategy.send((error, message) => {
+    this.parallelSendStrategy.send((error, message) => {
       // Even though the IPv4 socket sends fail, we should not get an error
       // as the other sockets succeed.
       test.strictEqual(error, null);
@@ -339,15 +334,7 @@ exports['ParallelSendStrategy'] = {
       // Ipv6 socket.
       test.strictEqual(message, this.testSockets[udpIpv6]);
 
-      let key;
-      for (key in this.testSockets) {
-        test.strictEqual(this.testSockets[key].socketSendStub.callCount, 2);
-        test.strictEqual(this.testSockets[key].socketCloseStub.callCount, 1);
-      }
-
-      test.strictEqual(this.createSocketStub.callCount, 2);
-
-      test.done();
+      commonStrategyTestValidation.call(this, test);
     });
   },
 
@@ -355,8 +342,7 @@ exports['ParallelSendStrategy'] = {
     // Setup sends to fail on Ipv6 socket.
     this.testSockets[udpIpv6].sendResult = sendResultError;
 
-    const parallelSendStrategy = new ParallelSendStrategy(this.testData, anyPort, anyRequest);
-    parallelSendStrategy.send((error, message) => {
+    this.parallelSendStrategy.send((error, message) => {
       // Even though the IPv6 socket sends fail, we should not get an error
       // as the other sockets succeed.
       test.strictEqual(error, null);
@@ -365,15 +351,7 @@ exports['ParallelSendStrategy'] = {
       // Ipv4 socket.
       test.strictEqual(message, this.testSockets[udpIpv4]);
 
-      let key;
-      for (key in this.testSockets) {
-        test.strictEqual(this.testSockets[key].socketSendStub.callCount, 2);
-        test.strictEqual(this.testSockets[key].socketCloseStub.callCount, 1);
-      }
-
-      test.strictEqual(this.createSocketStub.callCount, 2);
-
-      test.done();
+      commonStrategyTestValidation.call(this, test);
     });
   },
 
@@ -382,42 +360,24 @@ exports['ParallelSendStrategy'] = {
     this.testSockets[udpIpv4].sendResult = sendResultError;
     this.testSockets[udpIpv6].sendResult = sendResultError;
 
-    const parallelSendStrategy = new ParallelSendStrategy(this.testData, anyPort, anyRequest);
-    parallelSendStrategy.send((error, message) => {
+    this.parallelSendStrategy.send((error, message) => {
       // All socket sends fail. We should get an error on the last socket fail.
       test.strictEqual(error, this.testSockets[this.testData[this.testData.length - 1].udpVersion]);
 
       test.strictEqual(message, undefined);
 
-      let key;
-      for (key in this.testSockets) {
-        test.strictEqual(this.testSockets[key].socketSendStub.callCount, 2);
-        test.strictEqual(this.testSockets[key].socketCloseStub.callCount, 1);
-      }
-
-      test.strictEqual(this.createSocketStub.callCount, 2);
-
-      test.done();
+      commonStrategyTestValidation.call(this, test);
     });
   },
 
   'send cancel.': function(test) {
-    const parallelSendStrategy = new ParallelSendStrategy(this.testData, anyPort, anyRequest);
-    parallelSendStrategy.send((error, message) => {
+    this.parallelSendStrategy.send((error, message) => {
       // We should not get a callback as the send got cancelled.
       test.ok(false, 'Should never get here.');
     });
 
-    parallelSendStrategy.cancel();
+    this.parallelSendStrategy.cancel();
 
-    let key;
-    for (key in this.testSockets) {
-      test.strictEqual(this.testSockets[key].socketSendStub.callCount, 2);
-      test.strictEqual(this.testSockets[key].socketCloseStub.callCount, 1);
-    }
-
-    test.strictEqual(this.createSocketStub.callCount, 2);
-
-    test.done();
+    commonStrategyTestValidation.call(this, test);
   }
 };

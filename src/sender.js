@@ -112,6 +112,18 @@ class ParallelSendStrategy {
     this.onMessage = null;
   }
 
+  clearSockets() {
+    if (this.socketV4) {
+      clearSocket(this.socketV4, this.onError, this.onMessage);
+      this.socketV4 = null;
+    }
+
+    if (this.socketV6) {
+      clearSocket(this.socketV6, this.onError, this.onMessage);
+      this.socketV6 = null;
+    }
+  }
+
   send(cb) {
     let errorCount = 0;
 
@@ -119,31 +131,13 @@ class ParallelSendStrategy {
       errorCount++;
 
       if (errorCount === this.addresses.length) {
-        if (this.socketV4) {
-          clearSocket(this.socketV4, this.onError, this.onMessage);
-          this.socketV4 = null;
-        }
-
-        if (this.socketV6) {
-          clearSocket(this.socketV6, this.onError, this.onMessage);
-          this.socketV6 = null;
-        }
-
+        this.clearSockets();
         cb(err);
       }
     };
 
     const onMessage = (message) => {
-      if (this.socketV4) {
-        clearSocket(this.socketV4, this.onError, this.onMessage);
-        this.socketV4 = null;
-      }
-
-      if (this.socketV6) {
-        clearSocket(this.socketV6, this.onError, this.onMessage);
-        this.socketV6 = null;
-      }
-
+      this.clearSockets();
       cb(null, message);
     };
 
@@ -173,15 +167,7 @@ class ParallelSendStrategy {
   }
 
   cancel() {
-    if (this.socketV4) {
-      clearSocket(this.socketV4, this.onError, this.onMessage);
-      this.socketV4 = null;
-    }
-
-    if (this.socketV6) {
-      clearSocket(this.socketV6, this.onError, this.onMessage);
-      this.socketV6 = null;
-    }
+    this.clearSockets();
   }
 }
 
