@@ -65,6 +65,7 @@
     "source-map-support": "^0.4.14"
   },
   "scripts": {
+    "prepare": "npm run build",
     "pretest": "eslint src test",
     "test": "nodeunit --reporter minimal test/setup.js test/unit/ test/unit/token/ test/unit/tracking-buffer",
     "pretest-all": "eslint src test",
